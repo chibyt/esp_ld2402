@@ -13,7 +13,7 @@ from esphome.const import (
 from .. import CONF_LD2402_ID, LD2402Component, ld2402_ns
 
 LD2402BinarySensor = ld2402_ns.class_(
-    "LD2402BinarySensor", binary_sensor.BinarySensor, cg.Component
+    "LD2402BinarySensor", cg.Component
 )
 
 ICON_MEDITATION = "mdi:meditation"
