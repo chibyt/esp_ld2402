@@ -4,8 +4,8 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 
 namespace esphome::ld2402 {
-
-class LD2402BinarySensor : public LD2402Listener, public Component, binary_sensor::BinarySensor {
+class LD2402BinarySensor : public LD2402Listener, public Component {
+//class LD2402BinarySensor : public LD2402Listener, public Component, binary_sensor::BinarySensor {
  public:
   void dump_config() override;
   void set_presence_sensor(binary_sensor::BinarySensor *bsensor) { this->presence_bsensor_ = bsensor; };
