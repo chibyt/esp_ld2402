@@ -70,38 +70,29 @@ static constexpr uint16_t REFRESH_RATE_MS = 1000;
 // Command sets
 static constexpr uint16_t CMD_DISABLE_CONF = 0x00FE;
 static constexpr uint16_t CMD_ENABLE_CONF = 0x00FF;
-static constexpr uint16_t CMD_PARM_HIGH_TRESH = 0x0012;
-static constexpr uint16_t CMD_PARM_LOW_TRESH = 0x0021;
 static constexpr uint16_t CMD_PROTOCOL_VER = 0x0002;
 static constexpr uint16_t CMD_READ_ABD_PARAM = 0x0008;
-static constexpr uint16_t CMD_READ_REG_ADDR = 0x0020;
-static constexpr uint16_t CMD_READ_REGISTER = 0x0002;
-static constexpr uint16_t CMD_READ_SERIAL_NUM = 0x0011;
-static constexpr uint16_t CMD_READ_SYS_PARAM = 0x0013;
 static constexpr uint16_t CMD_READ_VERSION = 0x0000;
 static constexpr uint16_t CMD_RESTART = 0x0068;
 static constexpr uint16_t CMD_SYSTEM_MODE = 0x0000;
 static constexpr uint16_t CMD_SYSTEM_MODE_ENERGY = 0x0004;
 static constexpr uint16_t CMD_WRITE_ABD_PARAM = 0x0007;
-static constexpr uint16_t CMD_WRITE_REGISTER = 0x0001;
 static constexpr uint16_t CMD_WRITE_SYS_PARAM = 0x0012;
 
 static constexpr uint8_t CMD_ABD_DATA_REPLY_SIZE = 0x04;
 static constexpr uint8_t CMD_ABD_DATA_REPLY_START = 0x0A;
 static constexpr uint8_t CMD_MAX_BYTES = 0x64;
-static constexpr uint8_t CMD_REG_DATA_REPLY_SIZE = 0x02;
 
-static constexpr uint8_t LD2402_ERROR_NONE = 0x00;
 static constexpr uint8_t LD2402_ERROR_TIMEOUT = 0x02;
 static constexpr uint8_t LD2402_ERROR_UNKNOWN = 0x01;
 
 // Register address values
-static constexpr uint16_t CMD_MIN_GATE_REG = 0x0000;
 static constexpr uint16_t CMD_MAX_GATE_REG = 0x0001;
 static constexpr uint16_t CMD_TIMEOUT_REG = 0x0004;
 static constexpr uint16_t CMD_GATE_MOVE_THRESH[TOTAL_GATES] = {0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015,
                                                                0x0016, 0x0017, 0x0018, 0x0019, 0x001A, 0x001B,
                                                                0x001C, 0x001D, 0x001E, 0x001F};
+// Motion-low / hold threshold parameter IDs (0x0020–0x002F); not used by current write path yet.
 static constexpr uint16_t CMD_GATE_HOLD_THRESH[TOTAL_GATES] = {0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025,
                                                                0x0026, 0x0027, 0x0028, 0x0029, 0x002A, 0x002B,
                                                                0x002C, 0x002D, 0x002E, 0x002F};
@@ -110,8 +101,6 @@ static constexpr uint16_t CMD_GATE_STILL_THRESH[TOTAL_GATES] = {0x0030, 0x0031, 
                                                                 0x003C, 0x003D, 0x003E, 0x003F};
 static constexpr uint32_t FACTORY_MOVE_THRESH[TOTAL_GATES] = {89125, 50119, 6310, 2512, 1995, 1995, 1995, 1995,
                                                               1995,  1995,  1995, 1995, 1995, 1995, 1995, 1995};
-static constexpr uint32_t FACTORY_HOLD_THRESH[TOTAL_GATES] = {0, 0, 0, 0, 0, 0, 0, 0,
-                                                              0, 0, 0, 0, 0, 0, 0, 0};
 static constexpr uint32_t FACTORY_STILL_THRESH[TOTAL_GATES] = {158489, 63096, 10000, 3162, 3162, 2512, 1995, 1585,
                                                                1585,   1585,  1585,  1585, 1585, 1585, 1585, 1585};
 static constexpr uint16_t FACTORY_TIMEOUT = 30;
@@ -120,45 +109,19 @@ static constexpr uint16_t FACTORY_MAX_GATE = 85;
 // COMMAND_BYTE Header & Footer
 static constexpr uint32_t CMD_FRAME_FOOTER = 0x01020304;
 static constexpr uint32_t CMD_FRAME_HEADER = 0xFAFBFCFD;
-static constexpr uint32_t DEBUG_FRAME_FOOTER = 0xFAFBFCFD;
-static constexpr uint32_t DEBUG_FRAME_HEADER = 0x1410BFAA;
-static constexpr uint32_t ENERGY_FRAME_FOOTER = 0xF5F6F7F8;
-static constexpr uint32_t ENERGY_FRAME_HEADER = 0xF1F2F3F4;
+static constexpr uint32_t REPORT_FRAME_FOOTER = 0xF5F6F7F8;
 static constexpr uint8_t CMD_FRAME_COMMAND = 6;
 static constexpr uint8_t CMD_FRAME_DATA_LENGTH = 4;
-static constexpr uint8_t CMD_FRAME_STATUS = 7;
 static constexpr uint8_t CMD_ERROR_WORD = 8;
-static constexpr uint8_t ENERGY_SENSOR_START = 9;
-static const char *const OP_NORMAL_MODE_STRING = "Normal";
 
 static constexpr uint8_t MOVE_BITMASK = 0x01;
 static constexpr uint8_t STILL_BITMASK = 0x02;
 
-// Memory-efficient lookup tables
-struct StringToUint8 {
-  const char *str;
-  const uint8_t value;
-};
-
-static constexpr StringToUint8 OP_MODE_BY_STR[] = {
-    {"Normal", OP_NORMAL_MODE},
-};
-
-static constexpr const char *ERR_MESSAGE[] = {
+static constexpr const char *const ERR_MESSAGE[] = {
     "None",
     "Unknown",
     "Timeout",
 };
-
-// Helper function for lookups
-template<size_t N> uint8_t find_uint8(const StringToUint8 (&arr)[N], const std::string &str) {
-  for (const auto &entry : arr) {
-    if (str == entry.str) {
-      return entry.value;
-    }
-  }
-  return 0xFF;  // Not found
-}
 
 static uint8_t calc_checksum(void *data, size_t size) {
   uint8_t checksum = 0;
@@ -167,16 +130,6 @@ static uint8_t calc_checksum(void *data, size_t size) {
     checksum ^= data_bytes[i];  // XOR operation
   }
   return checksum;
-}
-
-static int get_firmware_int(const char *version_string) {
-  std::string version_str = version_string;
-  if (version_str[0] == 'v') {
-    version_str.erase(0, 1);
-  }
-  version_str.erase(remove(version_str.begin(), version_str.end(), '.'), version_str.end());
-  int version_integer = stoi(version_str);
-  return version_integer;
 }
 
 float LD2402Component::get_setup_priority() const { return setup_priority::BUS; }
@@ -193,7 +146,7 @@ void LD2402Component::dump_config() {
   LOG_NUMBER("  ", "Gate Select:", this->gate_select_number_);
   for (uint8_t gate = 0; gate < TOTAL_GATES; gate++) {
     LOG_NUMBER("  ", "Gate Move Threshold:", this->gate_move_threshold_numbers_[gate]);
-    LOG_NUMBER("  ", "Gate Still Threshold::", this->gate_still_threshold_numbers_[gate]);
+    LOG_NUMBER("  ", "Gate Still Threshold:", this->gate_still_threshold_numbers_[gate]);
   }
 #endif
 #ifdef USE_BUTTON
@@ -210,10 +163,7 @@ void LD2402Component::setup() {
     this->mark_failed();
     return;
   }
-  this->get_min_max_distances_timeout_();
-#ifdef USE_NUMBER
-  this->init_gate_config_numbers();
-#endif
+  this->get_max_distance_and_timeout_();
   this->get_firmware_version_();
   const char *pfw = this->firmware_ver_;
   std::string fw_str(pfw);
@@ -248,7 +198,7 @@ void LD2402Component::apply_config_action() {
     this->mark_failed();
     return;
   }
-  this->set_min_max_distances_timeout(this->new_config.max_gate, this->new_config.timeout);
+  this->set_max_distance_and_timeout(this->new_config.max_gate, this->new_config.timeout);
   for (uint8_t gate = 0; gate < TOTAL_GATES; gate++) {
     delay_microseconds_safe(125);
     this->set_gate_threshold(gate);
@@ -268,7 +218,7 @@ void LD2402Component::factory_reset_action() {
     this->mark_failed();
     return;
   }
-  this->set_min_max_distances_timeout(FACTORY_MAX_GATE, FACTORY_TIMEOUT);
+  this->set_max_distance_and_timeout(FACTORY_MAX_GATE, FACTORY_TIMEOUT);
 #ifdef USE_NUMBER
   this->gate_timeout_number_->state = FACTORY_TIMEOUT;
   this->max_gate_distance_number_->state = FACTORY_MAX_GATE;
@@ -333,20 +283,18 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len) {
     this->cmd_active_ = false;  // Set command state to inactive after response
     this->handle_ack_data_(buffer, this->buffer_pos_);
     this->buffer_pos_ = 0;
-  } else if ((memcmp(&buffer[this->buffer_pos_ - 4], &ENERGY_FRAME_FOOTER, sizeof(ENERGY_FRAME_FOOTER)) == 0) &&
+  } else if ((memcmp(&buffer[this->buffer_pos_ - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0) &&
              (this->get_mode_() == CMD_SYSTEM_MODE_ENERGY)) {
-    this->handle_energy_mode_(buffer, this->buffer_pos_);
+    this->handle_detection_frame_(buffer, this->buffer_pos_);
     this->buffer_pos_ = 0;
   }
 }
 
-void LD2402Component::handle_energy_mode_(uint8_t *buffer, int len) {
-
-  uint8_t index = 6;  // Start at presence byte position
+void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
+  const uint8_t index = 6;  // Presence / target-state byte (see engineering mode layout)
   uint16_t range;
-  const uint8_t elements = sizeof(this->gate_energy_) / sizeof(this->gate_energy_[0]);
-  if (len < static_cast<int>(index + 1 + sizeof(range) + elements * sizeof(this->gate_energy_[0]))) {
-    ESP_LOGW(TAG, "Energy frame too short: %d bytes", len);
+  if (len < static_cast<int>(index + 1 + sizeof(range))) {
+    ESP_LOGW(TAG, "Reporting frame too short: %d bytes", len);
     return;
   }
 
@@ -357,24 +305,21 @@ void LD2402Component::handle_energy_mode_(uint8_t *buffer, int len) {
     0x02 = Still target
   */
 
-  char target_state = buffer[index];
+  const uint8_t target_state = buffer[index];
   if (target_state != 0x00) {
-    this->set_presence_(0x01);
+    this->set_presence_(true);
     this->set_moving_target_(target_state & MOVE_BITMASK);
-    this->set_still_target_(target_state & STILL_BITMASK);
-  }
-  else {
-    this->set_presence_(0x00);
-    this->set_moving_target_(0x00);
-    this->set_still_target_(0x00);
+    this->set_still_target_((target_state & STILL_BITMASK) != 0);
+  } else {
+    this->set_presence_(false);
+    this->set_moving_target_(false);
+    this->set_still_target_(false);
   }
 
-  index++;
-  memcpy(&range, &buffer[index], sizeof(range));
-  index += sizeof(range);
+  memcpy(&range, &buffer[index + 1], sizeof(range));
   this->set_distance_(range);
 
-  // Resonable refresh rate for home assistant database size health
+  // Reasonable refresh rate for Home Assistant DB / network health
   const int32_t current_millis = App.get_loop_component_start_time();
   if (current_millis - this->last_periodic_millis < REFRESH_RATE_MS) {
     return;
@@ -385,7 +330,6 @@ void LD2402Component::handle_energy_mode_(uint8_t *buffer, int len) {
     listener->on_presence(this->get_presence_());
     listener->on_moving_target(this->get_moving_target_());
     listener->on_still_target(this->get_still_target_());
-    listener->on_energy(this->gate_energy_, sizeof(this->gate_energy_) / sizeof(this->gate_energy_[0]));
   }
 }
 
@@ -419,30 +363,16 @@ void LD2402Component::handle_ack_data_(uint8_t *buffer, int len) {
   }
   memcpy(&this->cmd_reply_.error, &buffer[CMD_ERROR_WORD], sizeof(this->cmd_reply_.error));
   const char *result = this->cmd_reply_.error ? "failure" : "success";
+  this->cmd_reply_.ack = true;
   if (this->cmd_reply_.error > 0) {
     return;
-  };
-  this->cmd_reply_.ack = true;
+  }
   switch ((uint16_t) this->cmd_reply_.command) {
     case (CMD_ENABLE_CONF):
       ESP_LOGV(TAG, "Set config enable: CMD = %2X %s", CMD_ENABLE_CONF, result);
       break;
     case (CMD_DISABLE_CONF):
       ESP_LOGV(TAG, "Set config disable: CMD = %2X %s", CMD_DISABLE_CONF, result);
-      break;
-    case (CMD_READ_REGISTER): {
-      ESP_LOGV(TAG, "Read register: CMD = %2X %s", CMD_READ_REGISTER, result);
-      // TODO Read/Write register is not implemented yet, this will get flushed out to a proper header file
-      data_pos = 0x0A;
-      uint16_t reg_count = std::min<uint16_t>((buffer[CMD_FRAME_DATA_LENGTH] - 4) / CMD_REG_DATA_REPLY_SIZE,
-                                              sizeof(this->cmd_reply_.data) / sizeof(this->cmd_reply_.data[0]));
-      for (uint16_t i = 0; i < reg_count; i++) {
-        memcpy(&this->cmd_reply_.data[i], &buffer[data_pos + i * CMD_REG_DATA_REPLY_SIZE], CMD_REG_DATA_REPLY_SIZE);
-      }
-      break;
-    }
-    case (CMD_WRITE_REGISTER):
-      ESP_LOGV(TAG, "Write register: CMD = %2X %s", CMD_WRITE_REGISTER, result);
       break;
     case (CMD_WRITE_ABD_PARAM):
       ESP_LOGV(TAG, "Write gate parameter(s): %2X %s", CMD_WRITE_ABD_PARAM, result);
@@ -525,10 +455,14 @@ int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
     }
     if (this->cmd_reply_.ack) {
       retry = 0;
+      if (this->cmd_reply_.error > 0) {
+        ESP_LOGE(TAG, "Command failed: device error 0x%04X", this->cmd_reply_.error);
+        error = LD2402_ERROR_UNKNOWN;
+      }
     }
-    if (this->cmd_reply_.error > 0) {
-      this->handle_cmd_error(error);
-    }
+  }
+  if (error == LD2402_ERROR_TIMEOUT) {
+    this->handle_cmd_error(error);
   }
   return error;
 }
@@ -560,33 +494,14 @@ void LD2402Component::ld2402_restart() {
   this->send_cmd_from_array(cmd_frame);
 }
 
-void LD2402Component::get_reg_value_(uint16_t reg) {
-  CmdFrameT cmd_frame;
-  cmd_frame.data_length = 0;
-  cmd_frame.header = CMD_FRAME_HEADER;
-  cmd_frame.command = CMD_READ_REGISTER;
-  cmd_frame.data[1] = reg;
-  cmd_frame.data_length += 2;
-  cmd_frame.footer = CMD_FRAME_FOOTER;
-  ESP_LOGV(TAG, "Sending read register %4X command: %2X", reg, cmd_frame.command);
-  this->send_cmd_from_array(cmd_frame);
+void LD2402Component::handle_cmd_error(uint8_t error) {
+  const size_t n = sizeof(ERR_MESSAGE) / sizeof(ERR_MESSAGE[0]);
+  if (error < n) {
+    ESP_LOGE(TAG, "Command transport failed: %s", ERR_MESSAGE[error]);
+  } else {
+    ESP_LOGE(TAG, "Command transport failed: code %u", error);
+  }
 }
-
-void LD2402Component::set_reg_value(uint16_t reg, uint16_t value) {
-  CmdFrameT cmd_frame;
-  cmd_frame.data_length = 0;
-  cmd_frame.header = CMD_FRAME_HEADER;
-  cmd_frame.command = CMD_WRITE_REGISTER;
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &reg, CMD_REG_DATA_REPLY_SIZE);
-  cmd_frame.data_length += 2;
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &value, CMD_REG_DATA_REPLY_SIZE);
-  cmd_frame.data_length += 2;
-  cmd_frame.footer = CMD_FRAME_FOOTER;
-  ESP_LOGV(TAG, "Sending write register %4X command: %2X data = %4X", reg, cmd_frame.command, value);
-  this->send_cmd_from_array(cmd_frame);
-}
-
-void LD2402Component::handle_cmd_error(uint8_t error) { ESP_LOGE(TAG, "Command failed: %s", ERR_MESSAGE[error]); }
 
 int LD2402Component::get_gate_threshold_(uint8_t gate) {
   uint8_t error;
@@ -608,28 +523,22 @@ int LD2402Component::get_gate_threshold_(uint8_t gate) {
   return error;
 }
 
-int LD2402Component::get_min_max_distances_timeout_() {
+int LD2402Component::get_max_distance_and_timeout_() {
   uint8_t error;
   CmdFrameT cmd_frame;
   cmd_frame.data_length = 0;
   cmd_frame.header = CMD_FRAME_HEADER;
   cmd_frame.command = CMD_READ_ABD_PARAM;
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_MIN_GATE_REG,
-         sizeof(CMD_MIN_GATE_REG));  // Register: global min detect gate number
-  cmd_frame.data_length += sizeof(CMD_MIN_GATE_REG);
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_MAX_GATE_REG,
-         sizeof(CMD_MAX_GATE_REG));  // Register: global max detect gate number
+  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_MAX_GATE_REG, sizeof(CMD_MAX_GATE_REG));
   cmd_frame.data_length += sizeof(CMD_MAX_GATE_REG);
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_TIMEOUT_REG,
-         sizeof(CMD_TIMEOUT_REG));  // Register: global delay time
+  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_TIMEOUT_REG, sizeof(CMD_TIMEOUT_REG));
   cmd_frame.data_length += sizeof(CMD_TIMEOUT_REG);
   cmd_frame.footer = CMD_FRAME_FOOTER;
-  ESP_LOGV(TAG, "Sending read gate min max and timeout command: %2X", cmd_frame.command);
+  ESP_LOGV(TAG, "Sending read max distance and timeout parameters: %2X", cmd_frame.command);
   error = this->send_cmd_from_array(cmd_frame);
   if (error == 0) {
-    this->current_config.min_gate = (uint16_t) cmd_reply_.data[0];
-    this->current_config.max_gate = (uint16_t) cmd_reply_.data[1];
-    this->current_config.timeout = (uint16_t) cmd_reply_.data[2];
+    this->current_config.max_gate = (uint16_t) cmd_reply_.data[0];
+    this->current_config.timeout = (uint16_t) cmd_reply_.data[1];
   }
   return error;
 }
@@ -664,31 +573,23 @@ void LD2402Component::get_firmware_version_() {
   this->send_cmd_from_array(cmd_frame);
 }
 
-void LD2402Component::set_min_max_distances_timeout(uint32_t max_gate_distance, // NOLINT
-                                                    uint32_t timeout) {
-  // Header H, Length L, Register R, Value V, Footer F
-  //                        |Min Gate         |Max Gate         |Timeout          |
-  // HH HH HH HH LL LL CC CC RR RR VV VV VV VV RR RR VV VV VV VV RR RR VV VV VV VV FF FF FF FF
-  // FD FC FB FA 14 00 07 00 00 00 01 00 00 00 01 00 09 00 00 00 04 00 0A 00 00 00 04 03 02 01 e.g.
-
+void LD2402Component::set_max_distance_and_timeout(uint32_t max_gate_distance, uint32_t timeout) {
+  // CMD_WRITE_ABD_PARAM (0x0007): max distance (reg 0x0001), disappearance delay / timeout (reg 0x0004).
   CmdFrameT cmd_frame;
   cmd_frame.data_length = 0;
   cmd_frame.header = CMD_FRAME_HEADER;
   cmd_frame.command = CMD_WRITE_ABD_PARAM;
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_MAX_GATE_REG,
-         sizeof(CMD_MAX_GATE_REG));  // Register: global max detect gate number
+  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_MAX_GATE_REG, sizeof(CMD_MAX_GATE_REG));
   cmd_frame.data_length += sizeof(CMD_MAX_GATE_REG);
   memcpy(&cmd_frame.data[cmd_frame.data_length], &max_gate_distance, sizeof(max_gate_distance));
   cmd_frame.data_length += sizeof(max_gate_distance);
-  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_TIMEOUT_REG,
-         sizeof(CMD_TIMEOUT_REG));  // Register: global delay time
+  memcpy(&cmd_frame.data[cmd_frame.data_length], &CMD_TIMEOUT_REG, sizeof(CMD_TIMEOUT_REG));
   cmd_frame.data_length += sizeof(CMD_TIMEOUT_REG);
   memcpy(&cmd_frame.data[cmd_frame.data_length], &timeout, sizeof(timeout));
-  ;
   cmd_frame.data_length += sizeof(timeout);
   cmd_frame.footer = CMD_FRAME_FOOTER;
 
-  ESP_LOGV(TAG, "Sending write gate min max and timeout command: %2X", cmd_frame.command);
+  ESP_LOGV(TAG, "Sending write max distance and timeout: %2X", cmd_frame.command);
   this->send_cmd_from_array(cmd_frame);
 }
 

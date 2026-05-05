@@ -8,9 +8,6 @@
 #ifdef USE_TEXT_SENSOR
 #include "esphome/components/text_sensor/text_sensor.h"
 #endif
-#ifdef USE_SELECT
-//#include "esphome/components/select/select.h"
-#endif
 #ifdef USE_NUMBER
 #include "esphome/components/number/number.h"
 #endif
@@ -20,14 +17,9 @@
 
 namespace esphome::ld2402 {
 
-// Energy frame is 141 bytes; +1 for null terminator, +4 so that a frame footer always lands
-// inside the buffer during footer-based resynchronization after losing sync.
+// UART line buffer limits: longest frame plus slack for newline termination and footer resync.
 static constexpr uint8_t MAX_LINE_LENGTH = 145;
 static constexpr uint8_t TOTAL_GATES = 16;
-
-enum OpMode : uint8_t {
-  OP_NORMAL_MODE = 1,
-};
 
 class LD2402Listener {
  public:
@@ -35,7 +27,6 @@ class LD2402Listener {
   virtual void on_moving_target(bool moving_target){};
   virtual void on_still_target(bool still_target){};
   virtual void on_distance(uint16_t distance){};
-  virtual void on_energy(uint16_t *sensor_energy, size_t size){};
   virtual void on_fw_version(std::string &fw){};
 };
 
@@ -53,7 +44,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
   struct RegConfigT {
     uint32_t move_thresh[TOTAL_GATES];
     uint32_t still_thresh[TOTAL_GATES];
-    uint16_t min_gate{0};
     uint16_t max_gate{0};
     uint16_t timeout{0};
   };
@@ -61,13 +51,9 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void setup() override;
   void dump_config() override;
   void loop() override;
-//#ifdef USE_SELECT
-//  void set_operating_mode_select(select::Select *selector) { this->operating_selector_ = selector; };
-//#endif
 #ifdef USE_NUMBER
   void set_gate_timeout_number(number::Number *number) { this->gate_timeout_number_ = number; };
   void set_gate_select_number(number::Number *number) { this->gate_select_number_ = number; };
-  void set_min_gate_distance_number(number::Number *number) { this->min_gate_distance_number_ = number; };
   void set_max_gate_distance_number(number::Number *number) { this->max_gate_distance_number_ = number; };
   void set_gate_move_sensitivity_factor_number(number::Number *number) {
     this->gate_move_sensitivity_factor_number_ = number;
@@ -79,8 +65,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_gate_move_threshold_numbers(int gate, number::Number *n) { this->gate_move_threshold_numbers_[gate] = n; };
   bool is_gate_select() { return gate_select_number_ != nullptr; };
   uint8_t get_gate_select_value() { return static_cast<uint8_t>(this->gate_select_number_->state); };
-  float get_min_gate_distance_value() { return min_gate_distance_number_->state; };
-  float get_max_gate_distance_value() { return max_gate_distance_number_->state; };
   void publish_gate_move_threshold(uint8_t gate) {
     // With gate_select we only use 1 number pointer, thus we hard code [0]
     this->gate_move_threshold_numbers_[0]->publish_state(this->new_config.move_thresh[gate]);
@@ -107,27 +91,14 @@ class LD2402Component : public Component, public uart::UARTDevice {
   float get_setup_priority() const override;
   int send_cmd_from_array(CmdFrameT cmd_frame);
   void handle_cmd_error(uint8_t error);
-  void set_operating_mode(const char *state);
   uint8_t set_config_mode(bool enable);
-  void set_min_max_distances_timeout(uint32_t max_gate_distance, uint32_t timeout);
-  void set_gate_threshold(uint8_t gate);
-  void set_reg_value(uint16_t reg, uint16_t value);
-  void set_system_mode(uint16_t mode);
   void ld2402_restart();
 
   float gate_move_sensitivity_factor{0.5};
   float gate_still_sensitivity_factor{0.5};
   int32_t last_periodic_millis{0};
-  int32_t report_periodic_millis{0};
-  int32_t monitor_periodic_millis{0};
-  int32_t last_normal_periodic_millis{0};
-  uint8_t current_operating_mode{OP_NORMAL_MODE};
-  bool output_energy_state{false};
   RegConfigT current_config;
   RegConfigT new_config;
-//#ifdef USE_SELECT
-//  select::Select *operating_selector_{nullptr};
-//#endif
 #ifdef USE_BUTTON
   button::Button *apply_config_button_{nullptr};
   button::Button *revert_config_button_{nullptr};
@@ -145,10 +116,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
     volatile bool ack;
   };
 
-  void get_firmware_version_();
-  int get_gate_threshold_(uint8_t gate);
-  void get_reg_value_(uint16_t reg);
-  int get_min_max_distances_timeout_();
   uint16_t get_mode_() { return this->system_mode_; };
   void set_mode_(uint16_t mode) { this->system_mode_ = mode; };
   bool get_presence_() { return this->presence_; };
@@ -159,17 +126,14 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_still_target_(bool still_target) { this->still_target_ = still_target; };
   uint16_t get_distance_() { return this->distance_; };
   void set_distance_(uint16_t distance) { this->distance_ = distance; };
-  void handle_energy_mode_(uint8_t *buffer, int len);
+  void handle_detection_frame_(uint8_t *buffer, int len);
   void handle_ack_data_(uint8_t *buffer, int len);
   void readline_(int rx_data, uint8_t *buffer, int len);
   void read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer);
-  void set_calibration_(bool state) { this->calibration_ = state; };
-  bool get_calibration_() { return this->calibration_; };
 
 #ifdef USE_NUMBER
   number::Number *gate_timeout_number_{nullptr};
   number::Number *gate_select_number_{nullptr};
-  number::Number *min_gate_distance_number_{nullptr};
   number::Number *max_gate_distance_number_{nullptr};
   number::Number *gate_move_sensitivity_factor_number_{nullptr};
   number::Number *gate_still_sensitivity_factor_number_{nullptr};
@@ -179,7 +143,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
 
   uint16_t distance_{0};
   uint16_t system_mode_;
-  uint16_t gate_energy_[TOTAL_GATES];
   uint8_t buffer_pos_{0};  // where to resume processing/populating buffer
   uint8_t buffer_data_[MAX_LINE_LENGTH];
   char firmware_ver_[8]{"v0.0.0"};
@@ -187,7 +150,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
   bool presence_{false};
   bool moving_target_{false};
   bool still_target_{false};
-  bool calibration_{false};
   CmdReplyT cmd_reply_;
   std::vector<LD2402Listener *> listeners_{};
 };

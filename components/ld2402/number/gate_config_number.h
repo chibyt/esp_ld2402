@@ -13,14 +13,6 @@ class LD2402TimeoutNumber : public number::Number, public Parented<LD2402Compone
   void control(float timeout) override;
 };
 
-class LD2402MinDistanceNumber : public number::Number, public Parented<LD2402Component> {
- public:
-  LD2402MinDistanceNumber() = default;
-
- protected:
-  void control(float min_gate) override;
-};
-
 class LD2402MaxDistanceNumber : public number::Number, public Parented<LD2402Component> {
  public:
   LD2402MaxDistanceNumber() = default;

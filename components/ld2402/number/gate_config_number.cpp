@@ -11,21 +11,8 @@ void LD2402TimeoutNumber::control(float timeout) {
   this->parent_->new_config.timeout = timeout;
 }
 
-void LD2402MinDistanceNumber::control(float min_gate) {
-  if ((uint16_t) min_gate > this->parent_->new_config.max_gate) {
-    min_gate = this->parent_->get_min_gate_distance_value();
-  } else {
-    this->parent_->new_config.min_gate = (uint16_t) min_gate;
-  }
-  this->publish_state(min_gate);
-}
-
 void LD2402MaxDistanceNumber::control(float max_gate) {
-  if ((uint16_t) max_gate < this->parent_->new_config.min_gate) {
-    max_gate = this->parent_->get_max_gate_distance_value();
-  } else {
-    this->parent_->new_config.max_gate = (uint16_t) max_gate;
-  }
+  this->parent_->new_config.max_gate = (uint16_t) max_gate;
   this->publish_state(max_gate);
 }
 
