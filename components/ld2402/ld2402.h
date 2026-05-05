@@ -92,6 +92,9 @@ class LD2402Component : public Component, public uart::UARTDevice {
   int send_cmd_from_array(CmdFrameT cmd_frame);
   void handle_cmd_error(uint8_t error);
   uint8_t set_config_mode(bool enable);
+  void set_system_mode(uint16_t mode);
+  void set_max_distance_and_timeout(uint32_t max_gate_distance, uint32_t timeout);
+  void set_gate_threshold(uint8_t gate);
   void ld2402_restart();
 
   float gate_move_sensitivity_factor{0.5};
@@ -116,6 +119,9 @@ class LD2402Component : public Component, public uart::UARTDevice {
     volatile bool ack;
   };
 
+  void get_firmware_version_();
+  int get_gate_threshold_(uint8_t gate);
+  int get_max_distance_and_timeout_();
   uint16_t get_mode_() { return this->system_mode_; };
   void set_mode_(uint16_t mode) { this->system_mode_ = mode; };
   bool get_presence_() { return this->presence_; };
