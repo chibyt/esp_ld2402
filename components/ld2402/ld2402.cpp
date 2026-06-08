@@ -110,7 +110,12 @@ static constexpr uint16_t FACTORY_MAX_GATE = 85;
 // COMMAND_BYTE Header & Footer
 static constexpr uint32_t CMD_FRAME_FOOTER = 0x01020304;
 static constexpr uint32_t CMD_FRAME_HEADER = 0xFAFBFCFD;
+static constexpr uint32_t REPORT_FRAME_HEADER = 0xF1F2F3F4;
 static constexpr uint32_t REPORT_FRAME_FOOTER = 0xF5F6F7F8;
+static constexpr uint16_t REPORT_FRAME_LENGTH_FIELD = 0x0083;
+static constexpr uint8_t REPORT_FRAME_TOTAL_SIZE = 141;
+static constexpr uint8_t REPORT_PRESENCE_INDEX = 6;
+static constexpr uint8_t REPORT_DISTANCE_INDEX = 7;
 static constexpr uint8_t CMD_FRAME_COMMAND = 6;
 static constexpr uint8_t CMD_FRAME_DATA_LENGTH = 4;
 static constexpr uint8_t CMD_ERROR_WORD = 8;
@@ -265,39 +270,154 @@ void LD2402Component::loop() {
   this->read_batch_(this->buffer_data_);
 }
 
-void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len) {
+bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) const {
+  if (len != REPORT_FRAME_TOTAL_SIZE) {
+    return false;
+  }
+  if (memcmp(buffer, &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
+    return false;
+  }
+  uint16_t length_field;
+  memcpy(&length_field, &buffer[4], sizeof(length_field));
+  if (length_field != REPORT_FRAME_LENGTH_FIELD) {
+    return false;
+  }
+  if (memcmp(&buffer[len - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
+    return false;
+  }
+  if (buffer[REPORT_PRESENCE_INDEX] > 0x03) {
+    return false;
+  }
+  uint16_t range;
+  memcpy(&range, &buffer[REPORT_DISTANCE_INDEX], sizeof(range));
+  uint16_t max_dist_cm = static_cast<uint16_t>(this->current_config.max_gate) * 10;
+  if (max_dist_cm == 0) {
+    max_dist_cm = 1000;
+  }
+  if (range > max_dist_cm) {
+    return false;
+  }
+  return true;
+}
+
+bool LD2402Component::validate_cmd_frame_(const uint8_t *buffer, int len) const {
+  if (len < 12) {
+    return false;
+  }
+  if (memcmp(buffer, &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) != 0) {
+    return false;
+  }
+  uint16_t data_len;
+  memcpy(&data_len, &buffer[CMD_FRAME_DATA_LENGTH], sizeof(data_len));
+  if (data_len < 2 || data_len > CMD_MAX_BYTES) {
+    return false;
+  }
+  const int expected_len = 4 + 2 + data_len + 4;
+  return len == expected_len;
+}
+
+void LD2402Component::resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos) {
+  if (buffer_pos < 4) {
+    return;
+  }
+
+  auto header_at = [&](uint8_t offset) -> bool {
+    if (offset + 3 >= buffer_pos) {
+      return false;
+    }
+    if (buffer[offset] == 0xF4 && memcmp(&buffer[offset], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) == 0) {
+      return true;
+    }
+    if (buffer[offset] == 0xFD && memcmp(&buffer[offset], &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) == 0) {
+      return true;
+    }
+    return false;
+  };
+
+  if (header_at(0)) {
+    return;
+  }
+
+  for (uint8_t i = 1; i + 3 < buffer_pos; i++) {
+    if (!header_at(i)) {
+      continue;
+    }
+    const uint8_t remainder = buffer_pos - i;
+    memmove(buffer, &buffer[i], remainder);
+    buffer_pos = remainder;
+    buffer[buffer_pos] = 0;
+    ESP_LOGD(TAG, "Resynced UART buffer to header at offset %u", i);
+    return;
+  }
+
+  // Keep a short tail so a header split across reads can still be found.
+  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
+  if (keep > 0 && keep < buffer_pos) {
+    memmove(buffer, &buffer[buffer_pos - keep], keep);
+  }
+  buffer_pos = keep;
+  buffer[buffer_pos] = 0;
+}
+
+void LD2402Component::append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
+  if (buffer_pos >= len - 1) {
+    ESP_LOGW(TAG, "UART buffer full (%u bytes); resyncing", buffer_pos);
+    this->resync_buffer_(buffer, buffer_pos);
+    if (buffer_pos >= len - 1) {
+      buffer_pos = 0;
+    }
+  }
+  buffer[buffer_pos++] = static_cast<uint8_t>(rx_data);
+  buffer[buffer_pos] = 0;
+  if (buffer_pos >= 4) {
+    this->resync_buffer_(buffer, buffer_pos);
+  }
+}
+
+void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
   if (rx_data < 0) {
-    return;  // No data available
+    return;
   }
-  if (this->buffer_pos_ < len - 1) {
-    buffer[this->buffer_pos_++] = rx_data;
-    buffer[this->buffer_pos_] = 0;
+
+  this->append_rx_byte_(rx_data, buffer, len, buffer_pos);
+  if (buffer_pos < 4) {
+    return;
+  }
+
+  if (memcmp(&buffer[buffer_pos - 4], &CMD_FRAME_FOOTER, sizeof(CMD_FRAME_FOOTER)) == 0) {
+    if (this->validate_cmd_frame_(buffer, buffer_pos)) {
+      this->cmd_active_ = false;
+      this->handle_ack_data_(buffer, buffer_pos);
+      buffer_pos = 0;
+    } else {
+      ESP_LOGW(TAG, "Misaligned command frame (%u bytes); resyncing", buffer_pos);
+      this->resync_buffer_(buffer, buffer_pos);
+    }
+    return;
+  }
+
+  if (memcmp(&buffer[buffer_pos - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
+    return;
+  }
+
+  if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
+    ESP_LOGD(TAG, "Ignoring report frame while not in energy mode");
+    this->resync_buffer_(buffer, buffer_pos);
+    return;
+  }
+
+  if (this->validate_detection_frame_(buffer, buffer_pos)) {
+    this->handle_detection_frame_(buffer, buffer_pos);
+    buffer_pos = 0;
   } else {
-    // We should never get here, but just in case...
-    ESP_LOGW(TAG, "Max command length exceeded; ignoring");
-    this->buffer_pos_ = 0;
-  }
-  if (this->buffer_pos_ < 4) {
-    return;  // Not enough data to process yet
-  }
-  if (memcmp(&buffer[this->buffer_pos_ - 4], &CMD_FRAME_FOOTER, sizeof(CMD_FRAME_FOOTER)) == 0) {
-    this->cmd_active_ = false;  // Set command state to inactive after response
-    this->handle_ack_data_(buffer, this->buffer_pos_);
-    this->buffer_pos_ = 0;
-  } else if ((memcmp(&buffer[this->buffer_pos_ - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0) &&
-             (this->get_mode_() == CMD_SYSTEM_MODE_ENERGY)) {
-    this->handle_detection_frame_(buffer, this->buffer_pos_);
-    this->buffer_pos_ = 0;
+    ESP_LOGW(TAG, "Misaligned detection frame (%u bytes); resyncing", buffer_pos);
+    this->resync_buffer_(buffer, buffer_pos);
   }
 }
 
 void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
-  const uint8_t index = 6;  // Presence / target-state byte (see engineering mode layout)
+  const uint8_t index = REPORT_PRESENCE_INDEX;
   uint16_t range;
-  if (len < static_cast<int>(index + 1 + sizeof(range))) {
-    ESP_LOGW(TAG, "Reporting frame too short: %d bytes", len);
-    return;
-  }
 
   /*
     Target states:
@@ -317,7 +437,7 @@ void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
     this->set_still_target_(false);
   }
 
-  memcpy(&range, &buffer[index + 1], sizeof(range));
+  memcpy(&range, &buffer[REPORT_DISTANCE_INDEX], sizeof(range));
   this->set_distance_(range);
 
   // Reasonable refresh rate for Home Assistant DB / network health
@@ -346,7 +466,7 @@ void LD2402Component::read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer) {
     avail -= to_read;
 
     for (size_t i = 0; i < to_read; i++) {
-      this->readline_(buf[i], buffer.data(), buffer.size());
+      this->readline_(buf[i], buffer.data(), buffer.size(), this->detection_buffer_pos_);
     }
   }
 }
@@ -410,6 +530,7 @@ int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
   uint8_t ack_buffer[MAX_LINE_LENGTH];
   uint8_t cmd_buffer[MAX_LINE_LENGTH];
   this->cmd_reply_.ack = false;
+  this->cmd_buffer_pos_ = 0;
   if (frame.command != CMD_RESTART) {
     this->cmd_active_ = true;
   }  // Restart does not reply, thus no ack state required
@@ -443,7 +564,7 @@ int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
 
     while (!this->cmd_reply_.ack) {
       while (this->available()) {
-        this->readline_(this->read(), ack_buffer, sizeof(ack_buffer));
+        this->readline_(this->read(), ack_buffer, sizeof(ack_buffer), this->cmd_buffer_pos_);
       }
       delay_microseconds_safe(1450);
       // Wait on an Rx from the LD2402 for up to 3 1 second loops, otherwise it could trigger a WDT.

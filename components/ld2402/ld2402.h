@@ -17,8 +17,8 @@
 
 namespace esphome::ld2402 {
 
-// UART line buffer limits: longest frame plus slack for newline termination and footer resync.
-static constexpr uint8_t MAX_LINE_LENGTH = 145;
+// UART line buffer limits: longest frame (141 B) plus resync/search slack.
+static constexpr uint8_t MAX_LINE_LENGTH = 160;
 static constexpr uint8_t TOTAL_GATES = 16;
 
 class LD2402Listener {
@@ -134,8 +134,12 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_distance_(uint16_t distance) { this->distance_ = distance; };
   void handle_detection_frame_(uint8_t *buffer, int len);
   void handle_ack_data_(uint8_t *buffer, int len);
-  void readline_(int rx_data, uint8_t *buffer, int len);
+  void readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
   void read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer);
+  void append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
+  void resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos);
+  bool validate_detection_frame_(const uint8_t *buffer, int len) const;
+  bool validate_cmd_frame_(const uint8_t *buffer, int len) const;
 
 #ifdef USE_NUMBER
   number::Number *gate_timeout_number_{nullptr};
@@ -149,7 +153,8 @@ class LD2402Component : public Component, public uart::UARTDevice {
 
   uint16_t distance_{0};
   uint16_t system_mode_;
-  uint8_t buffer_pos_{0};  // where to resume processing/populating buffer
+  uint8_t detection_buffer_pos_{0};
+  uint8_t cmd_buffer_pos_{0};
   uint8_t buffer_data_[MAX_LINE_LENGTH];
   char firmware_ver_[8]{"v0.0.0"};
   bool cmd_active_{false};
