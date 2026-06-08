@@ -99,10 +99,11 @@ static constexpr uint16_t CMD_GATE_HOLD_THRESH[TOTAL_GATES] = {0x0020, 0x0021, 0
 static constexpr uint16_t CMD_GATE_STILL_THRESH[TOTAL_GATES] = {0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035,
                                                                 0x0036, 0x0037, 0x0038, 0x0039, 0x003A, 0x003B,
                                                                 0x003C, 0x003D, 0x003E, 0x003F};
-static constexpr uint32_t FACTORY_MOVE_THRESH[TOTAL_GATES] = {89125, 50119, 6310, 2512, 1995, 1995, 1995, 1995,
-                                                              1995,  1995,  1995, 1995, 1995, 1995, 1995, 1995};
-static constexpr uint32_t FACTORY_STILL_THRESH[TOTAL_GATES] = {158489, 63096, 10000, 3162, 3162, 2512, 1995, 1585,
-                                                               1585,   1585,  1585,  1585, 1585, 1585, 1585, 1585};
+//static constexpr uint32_t FACTORY_MOVE_THRESH[TOTAL_GATES] = {89125, 50119, 6310, 2512, 1995, 1995, 1995, 1995, 1995,  1995,  1995, 1995, 1995, 1995, 1995, 1995};
+//static constexpr uint32_t FACTORY_STILL_THRESH[TOTAL_GATES] = {158489, 63096, 10000, 3162, 3162, 2512, 1995, 1585, 1585,   1585,  1585,  1585, 1585, 1585, 1585, 1585};
+
+static constexpr uint32_t FACTORY_MOVE_THRESH[TOTAL_GATES] = {141254, 79433, 100000, 3981, 3162, 3162, 3162, 3162, 3162,  3162,  3162, 3162, 3162, 3162, 3162, 3162};
+static constexpr uint32_t FACTORY_STILL_THRESH[TOTAL_GATES] = {251189, 100000, 15849, 5012, 5012, 3981, 3162, 2512, 2512, 2512, 2512, 2512, 2512, 2512, 2512, 2512};
 static constexpr uint16_t FACTORY_TIMEOUT = 30;
 static constexpr uint16_t FACTORY_MAX_GATE = 85;
 
