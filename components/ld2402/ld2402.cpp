@@ -671,6 +671,10 @@ void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
     0x02 = Still target
   */
 
+  const bool prev_presence = this->presence_;
+  const bool prev_moving = this->moving_target_;
+  const bool prev_still = this->still_target_;
+
   const uint8_t target_state = buffer[index];
   if (target_state != 0x00) {
     this->set_presence_(true);
@@ -682,20 +686,32 @@ void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
     this->set_still_target_(false);
   }
 
+  const bool presence_edge = prev_presence != this->presence_;
+  const bool moving_edge = prev_moving != this->moving_target_;
+  const bool still_edge = prev_still != this->still_target_;
+  if (presence_edge || moving_edge || still_edge) {
+    for (auto &listener : this->listeners_) {
+      if (presence_edge) {
+        listener->on_presence(this->presence_);
+      }
+      if (moving_edge) {
+        listener->on_moving_target(this->moving_target_);
+      }
+      if (still_edge) {
+        listener->on_still_target(this->still_target_);
+      }
+    }
+  }
+
   memcpy(&range, &buffer[REPORT_DISTANCE_INDEX], sizeof(range));
   this->set_distance_(range);
 
-  // Reasonable refresh rate for Home Assistant DB / network health
   const int32_t current_millis = App.get_loop_component_start_time();
-  if (current_millis - this->last_periodic_millis < REFRESH_RATE_MS) {
-    return;
-  }
-  this->last_periodic_millis = current_millis;
-  for (auto &listener : this->listeners_) {
-    listener->on_distance(this->get_distance_());
-    listener->on_presence(this->get_presence_());
-    listener->on_moving_target(this->get_moving_target_());
-    listener->on_still_target(this->get_still_target_());
+  if (current_millis - this->last_periodic_millis >= REFRESH_RATE_MS) {
+    this->last_periodic_millis = current_millis;
+    for (auto &listener : this->listeners_) {
+      listener->on_distance(this->get_distance_());
+    }
   }
 }
 
