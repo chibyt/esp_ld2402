@@ -14,6 +14,9 @@
 #ifdef USE_BUTTON
 #include "esphome/components/button/button.h"
 #endif
+#ifdef USE_SENSOR
+#include "esphome/components/sensor/sensor.h"
+#endif
 
 namespace esphome::ld2402 {
 
@@ -78,14 +81,26 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #ifdef USE_BUTTON
   void set_apply_config_button(button::Button *button) { this->apply_config_button_ = button; };
   void set_revert_config_button(button::Button *button) { this->revert_config_button_ = button; };
+  void set_auto_calibrate_button(button::Button *button) { this->auto_calibrate_button_ = button; };
+  void set_save_config_button(button::Button *button) { this->save_config_button_ = button; };
+  void set_revert_config_button(button::Button *button) { this->revert_config_button_ = button; };
   void set_restart_module_button(button::Button *button) { this->restart_module_button_ = button; };
   void set_factory_reset_button(button::Button *button) { this->factory_reset_button_ = button; };
 #endif
+#ifdef USE_SENSOR
+  void set_calibration_progress_sensor(sensor::Sensor *sensor) { this->calibration_progress_sensor_ = sensor; };
+#endif
   void register_listener(LD2402Listener *listener) { this->listeners_.push_back(listener); }
+
+  void set_auto_trigger_coefficient(float value) { this->auto_trigger_coefficient_ = value; }
+  void set_auto_hold_coefficient(float value) { this->auto_hold_coefficient_ = value; }
+  void set_auto_micro_coefficient(float value) { this->auto_micro_coefficient_ = value; }
 
   void send_module_restart();
   void restart_module_action();
   void apply_config_action();
+  void auto_calibrate_action();
+  void save_config_action();
   void factory_reset_action();
   void revert_config_action();
   float get_setup_priority() const override;
@@ -104,16 +119,22 @@ class LD2402Component : public Component, public uart::UARTDevice {
   RegConfigT new_config;
 #ifdef USE_BUTTON
   button::Button *apply_config_button_{nullptr};
+  button::Button *auto_calibrate_button_{nullptr};
+  button::Button *save_config_button_{nullptr};
   button::Button *revert_config_button_{nullptr};
   button::Button *restart_module_button_{nullptr};
   button::Button *factory_reset_button_{nullptr};
+#endif
+#ifdef USE_SENSOR
+  sensor::Sensor *calibration_progress_sensor_{nullptr};
 #endif
 
  protected:
   struct CmdReplyT {
     uint32_t data[4];
     uint16_t error;
-    uint8_t command;
+    uint16_t command;
+    uint16_t ack_value;
     uint8_t status;
     uint8_t length;
     volatile bool ack;
@@ -134,6 +155,7 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_distance_(uint16_t distance) { this->distance_ = distance; };
   void handle_detection_frame_(uint8_t *buffer, int len);
   void handle_ack_data_(uint8_t *buffer, int len);
+  int write_cmd_frame_(CmdFrameT cmd_frame);
   void readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
   void read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer);
   void append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
@@ -145,6 +167,16 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed);
   void trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
   void process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos);
+  void handle_calibration_interference_report_(uint8_t *buffer, int len);
+  void poll_auto_calibration_();
+  void finish_auto_calibration_();
+  void publish_calibration_progress_(uint8_t progress);
+  int start_auto_threshold_();
+  int query_auto_threshold_progress_();
+  int save_params_to_flash_();
+  int reload_gate_thresholds_();
+  static uint16_t coeff_to_param_(float coefficient);
+  static int parse_calibration_progress_(const uint8_t *buffer, int len);
   uint32_t reject_log_count_{0};
   uint32_t last_reject_dump_ms_{0};
   uint32_t last_buffer_full_log_ms_{0};
@@ -166,6 +198,13 @@ class LD2402Component : public Component, public uart::UARTDevice {
   uint8_t buffer_data_[MAX_LINE_LENGTH];
   char firmware_ver_[8]{"v0.0.0"};
   bool cmd_active_{false};
+  bool calibrating_{false};
+  bool calibration_interference_{false};
+  uint8_t calibration_progress_{0};
+  uint32_t last_calibration_poll_ms_{0};
+  float auto_trigger_coefficient_{3.0f};
+  float auto_hold_coefficient_{3.0f};
+  float auto_micro_coefficient_{3.0f};
   bool presence_{false};
   bool moving_target_{false};
   bool still_target_{false};

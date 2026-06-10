@@ -37,4 +37,20 @@ class LD2402FactoryResetButton : public button::Button, public Parented<LD2402Co
   void press_action() override;
 };
 
+class LD2402AutoCalibrateButton : public button::Button, public Parented<LD2402Component> {
+ public:
+  LD2402AutoCalibrateButton() = default;
+
+ protected:
+  void press_action() override;
+};
+
+class LD2402SaveConfigButton : public button::Button, public Parented<LD2402Component> {
+ public:
+  LD2402SaveConfigButton() = default;
+
+ protected:
+  void press_action() override;
+};
+
 }  // namespace esphome::ld2402

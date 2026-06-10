@@ -13,11 +13,23 @@ ld2402_ns = cg.esphome_ns.namespace("ld2402")
 LD2402Component = ld2402_ns.class_("LD2402Component", cg.Component, uart.UARTDevice)
 
 CONF_LD2402_ID = "ld2402_id"
+CONF_AUTO_TRIGGER_COEFFICIENT = "auto_trigger_coefficient"
+CONF_AUTO_HOLD_COEFFICIENT = "auto_hold_coefficient"
+CONF_AUTO_MICRO_COEFFICIENT = "auto_micro_coefficient"
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(LD2402Component),
+            cv.Optional(CONF_AUTO_TRIGGER_COEFFICIENT, default=3.0): cv.float_range(
+                min=1.0, max=20.0
+            ),
+            cv.Optional(CONF_AUTO_HOLD_COEFFICIENT, default=3.0): cv.float_range(
+                min=1.0, max=20.0
+            ),
+            cv.Optional(CONF_AUTO_MICRO_COEFFICIENT, default=3.0): cv.float_range(
+                min=1.0, max=20.0
+            ),
         }
     )
     .extend(uart.UART_DEVICE_SCHEMA)
@@ -37,3 +49,6 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
+    cg.add(var.set_auto_trigger_coefficient(config[CONF_AUTO_TRIGGER_COEFFICIENT]))
+    cg.add(var.set_auto_hold_coefficient(config[CONF_AUTO_HOLD_COEFFICIENT]))
+    cg.add(var.set_auto_micro_coefficient(config[CONF_AUTO_MICRO_COEFFICIENT]))

@@ -78,6 +78,11 @@ static constexpr uint16_t CMD_SYSTEM_MODE = 0x0000;
 static constexpr uint16_t CMD_SYSTEM_MODE_ENERGY = 0x0004;
 static constexpr uint16_t CMD_WRITE_ABD_PARAM = 0x0007;
 static constexpr uint16_t CMD_WRITE_SYS_PARAM = 0x0012;
+static constexpr uint16_t CMD_AUTO_THRESHOLD_START = 0x0009;
+static constexpr uint16_t CMD_AUTO_THRESHOLD_PROGRESS = 0x000A;
+static constexpr uint16_t CMD_AUTO_THRESHOLD_INTERFERENCE = 0x0014;
+static constexpr uint16_t CMD_SAVE_PARAMS = 0x00FD;
+static constexpr uint32_t CALIBRATION_POLL_INTERVAL_MS = 5000;
 
 static constexpr uint8_t CMD_ABD_DATA_REPLY_SIZE = 0x04;
 static constexpr uint8_t CMD_ABD_DATA_REPLY_START = 0x0A;
@@ -161,6 +166,8 @@ void LD2402Component::dump_config() {
 #endif
 #ifdef USE_BUTTON
   LOG_BUTTON("  ", "Apply Config:", this->apply_config_button_);
+  LOG_BUTTON("  ", "Auto Calibrate:", this->auto_calibrate_button_);
+  LOG_BUTTON("  ", "Save Config:", this->save_config_button_);
   LOG_BUTTON("  ", "Revert Edits:", this->revert_config_button_);
   LOG_BUTTON("  ", "Factory Reset:", this->factory_reset_button_);
   LOG_BUTTON("  ", "Restart Module:", this->restart_module_button_);
@@ -266,12 +273,50 @@ void LD2402Component::revert_config_action() {
   ESP_LOGD(TAG, "Reverted config number edits");
 }
 
+void LD2402Component::auto_calibrate_action() {
+  if (this->calibrating_) {
+    ESP_LOGW(TAG, "Auto-calibration already in progress");
+    return;
+  }
+  ESP_LOGI(TAG, "Starting auto-threshold calibration (trigger=%.1f hold=%.1f micro=%.1f)",
+           this->auto_trigger_coefficient_, this->auto_hold_coefficient_, this->auto_micro_coefficient_);
+  if (this->set_config_mode(true) == LD2402_ERROR_TIMEOUT) {
+    ESP_LOGE(TAG, ESP_LOG_MSG_COMM_FAIL);
+    this->mark_failed();
+    return;
+  }
+  if (this->start_auto_threshold_() != 0) {
+    ESP_LOGE(TAG, "Failed to start auto-threshold calibration");
+    this->set_config_mode(false);
+    return;
+  }
+  this->calibrating_ = true;
+  this->calibration_interference_ = false;
+  this->calibration_progress_ = 0;
+  this->last_calibration_poll_ms_ = 0;
+  this->publish_calibration_progress_(0);
+}
+
+void LD2402Component::save_config_action() {
+  ESP_LOGI(TAG, "Saving LD2402 parameters to flash");
+  if (this->set_config_mode(true) == LD2402_ERROR_TIMEOUT) {
+    ESP_LOGE(TAG, ESP_LOG_MSG_COMM_FAIL);
+    this->mark_failed();
+    return;
+  }
+  if (this->save_params_to_flash_() != 0) {
+    ESP_LOGE(TAG, "Failed to save parameters to flash");
+  }
+  this->set_config_mode(false);
+}
+
 void LD2402Component::loop() {
   // If there is a active send command do not process it here, the send command call will handle it.
   if (this->cmd_active_) {
     return;
   }
   this->read_batch_(this->buffer_data_);
+  this->poll_auto_calibration_();
 }
 
 bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) const {
@@ -534,6 +579,13 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
 
   if (memcmp(&buffer[buffer_pos - 4], &CMD_FRAME_FOOTER, sizeof(CMD_FRAME_FOOTER)) == 0) {
     if (this->validate_cmd_frame_(buffer, buffer_pos)) {
+      uint16_t cmd_word;
+      memcpy(&cmd_word, &buffer[CMD_FRAME_COMMAND], sizeof(cmd_word));
+      if (cmd_word == CMD_AUTO_THRESHOLD_INTERFERENCE) {
+        this->handle_calibration_interference_report_(buffer, buffer_pos);
+        buffer_pos = 0;
+        return;
+      }
       this->cmd_active_ = false;
       this->handle_ack_data_(buffer, buffer_pos);
       buffer_pos = 0;
@@ -604,7 +656,7 @@ void LD2402Component::read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer) {
 }
 
 void LD2402Component::handle_ack_data_(uint8_t *buffer, int len) {
-  this->cmd_reply_.command = buffer[CMD_FRAME_COMMAND];
+  memcpy(&this->cmd_reply_.command, &buffer[CMD_FRAME_COMMAND], sizeof(this->cmd_reply_.command));
   this->cmd_reply_.length = buffer[CMD_FRAME_DATA_LENGTH];
   uint16_t data_pos = 0;
   if (this->cmd_reply_.length > CMD_MAX_BYTES) {
@@ -620,17 +672,18 @@ void LD2402Component::handle_ack_data_(uint8_t *buffer, int len) {
   if (this->cmd_reply_.error > 0) {
     return;
   }
-  switch ((uint16_t) this->cmd_reply_.command) {
-    case (CMD_ENABLE_CONF):
+  const uint8_t cmd_base = this->cmd_reply_.command & 0xFF;
+  switch (cmd_base) {
+    case 0xFF:
       ESP_LOGV(TAG, "Set config enable: CMD = %2X %s", CMD_ENABLE_CONF, result);
       break;
-    case (CMD_DISABLE_CONF):
+    case 0xFE:
       ESP_LOGV(TAG, "Set config disable: CMD = %2X %s", CMD_DISABLE_CONF, result);
       break;
-    case (CMD_WRITE_ABD_PARAM):
+    case 0x07:
       ESP_LOGV(TAG, "Write gate parameter(s): %2X %s", CMD_WRITE_ABD_PARAM, result);
       break;
-    case (CMD_READ_ABD_PARAM): {
+    case 0x08: {
       ESP_LOGV(TAG, "Read gate parameter(s): %2X %s", CMD_READ_ABD_PARAM, result);
       data_pos = CMD_ABD_DATA_REPLY_START;
       uint16_t abd_count = std::min<uint16_t>((buffer[CMD_FRAME_DATA_LENGTH] - 4) / CMD_ABD_DATA_REPLY_SIZE,
@@ -641,53 +694,73 @@ void LD2402Component::handle_ack_data_(uint8_t *buffer, int len) {
       }
       break;
     }
-    case (CMD_WRITE_SYS_PARAM):
+    case 0x12:
       ESP_LOGV(TAG, "Set system parameter(s): %2X %s", CMD_WRITE_SYS_PARAM, result);
       break;
-    case (CMD_READ_VERSION): {
+    case 0x00: {
       uint8_t ver_len = std::min<uint8_t>(buffer[10], sizeof(this->firmware_ver_) - 1);
       memcpy(this->firmware_ver_, &buffer[12], ver_len);
       this->firmware_ver_[ver_len] = '\0';
       ESP_LOGV(TAG, "Firmware version: %s %s", this->firmware_ver_, result);
       break;
     }
+    case 0x09:
+      ESP_LOGI(TAG, "Auto-threshold generation started");
+      break;
+    case 0x0A: {
+      const int progress = this->parse_calibration_progress_(buffer, len);
+      if (progress >= 0) {
+        this->cmd_reply_.ack_value = static_cast<uint16_t>(progress);
+        ESP_LOGI(TAG, "Auto-threshold progress: %d%%", progress);
+      }
+      break;
+    }
+    case 0xFD:
+      ESP_LOGI(TAG, "Parameters saved to radar flash");
+      break;
     default:
       break;
   }
+}
+
+int LD2402Component::write_cmd_frame_(CmdFrameT frame) {
+  uint8_t cmd_buffer[MAX_LINE_LENGTH];
+  frame.length = 0;
+  const uint16_t frame_data_bytes = frame.data_length + 2;
+
+  memcpy(&cmd_buffer[frame.length], &frame.header, sizeof(frame.header));
+  frame.length += sizeof(frame.header);
+
+  memcpy(&cmd_buffer[frame.length], &frame_data_bytes, sizeof(frame.data_length));
+  frame.length += sizeof(frame.data_length);
+
+  memcpy(&cmd_buffer[frame.length], &frame.command, sizeof(frame.command));
+  frame.length += sizeof(frame.command);
+
+  for (uint16_t index = 0; index < frame.data_length; index++) {
+    memcpy(&cmd_buffer[frame.length], &frame.data[index], sizeof(frame.data[index]));
+    frame.length += sizeof(frame.data[index]);
+  }
+
+  memcpy(cmd_buffer + frame.length, &frame.footer, sizeof(frame.footer));
+  frame.length += sizeof(frame.footer);
+  this->write_array(cmd_buffer, frame.length);
+  return 0;
 }
 
 int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
   uint32_t start_millis = millis();
   uint8_t error = 0;
   uint8_t ack_buffer[MAX_LINE_LENGTH];
-  uint8_t cmd_buffer[MAX_LINE_LENGTH];
   this->cmd_reply_.ack = false;
+  this->cmd_reply_.ack_value = 0;
   this->cmd_buffer_pos_ = 0;
   if (frame.command != CMD_RESTART) {
     this->cmd_active_ = true;
   }  // Restart does not reply, thus no ack state required
   uint8_t retry = 3;
   while (retry) {
-    frame.length = 0;
-    uint16_t frame_data_bytes = frame.data_length + 2;  // Always add two bytes for the cmd size
-
-    memcpy(&cmd_buffer[frame.length], &frame.header, sizeof(frame.header));
-    frame.length += sizeof(frame.header);
-
-    memcpy(&cmd_buffer[frame.length], &frame_data_bytes, sizeof(frame.data_length));
-    frame.length += sizeof(frame.data_length);
-
-    memcpy(&cmd_buffer[frame.length], &frame.command, sizeof(frame.command));
-    frame.length += sizeof(frame.command);
-
-    for (uint16_t index = 0; index < frame.data_length; index++) {
-      memcpy(&cmd_buffer[frame.length], &frame.data[index], sizeof(frame.data[index]));
-      frame.length += sizeof(frame.data[index]);
-    }
-
-    memcpy(cmd_buffer + frame.length, &frame.footer, sizeof(frame.footer));
-    frame.length += sizeof(frame.footer);
-    this->write_array(cmd_buffer, frame.length);
+    this->write_cmd_frame_(frame);
 
     error = 0;
     if (frame.command == CMD_RESTART) {
@@ -871,6 +944,169 @@ void LD2402Component::set_gate_threshold(uint8_t gate) {
   cmd_frame.footer = CMD_FRAME_FOOTER;
   ESP_LOGV(TAG, "Sending set gate %4X sensitivity command: %2X", gate, cmd_frame.command);
   this->send_cmd_from_array(cmd_frame);
+}
+
+uint16_t LD2402Component::coeff_to_param_(float coefficient) {
+  if (coefficient < 1.0f) {
+    coefficient = 1.0f;
+  } else if (coefficient > 20.0f) {
+    coefficient = 20.0f;
+  }
+  uint16_t value = static_cast<uint16_t>(coefficient * 10.0f);
+  if (value < 0x000A) {
+    value = 0x000A;
+  } else if (value > 0x00C8) {
+    value = 0x00C8;
+  }
+  return value;
+}
+
+int LD2402Component::parse_calibration_progress_(const uint8_t *buffer, int len) {
+  if (len < 12) {
+    return -1;
+  }
+  uint16_t cmd_word;
+  memcpy(&cmd_word, &buffer[CMD_FRAME_COMMAND], sizeof(cmd_word));
+  if ((cmd_word & 0xFF) != 0x0A) {
+    return -1;
+  }
+  uint16_t error_word;
+  memcpy(&error_word, &buffer[CMD_ERROR_WORD], sizeof(error_word));
+  if (error_word != 0) {
+    return -1;
+  }
+
+  uint16_t pct;
+  memcpy(&pct, &buffer[10], sizeof(pct));
+  if (pct <= 100) {
+    return pct;
+  }
+
+  const uint8_t raw = buffer[10];
+  if (raw <= 0x64) {
+    return (raw * 100) / 0x64;
+  }
+  return -1;
+}
+
+int LD2402Component::start_auto_threshold_() {
+  const uint16_t trigger = this->coeff_to_param_(this->auto_trigger_coefficient_);
+  const uint16_t hold = this->coeff_to_param_(this->auto_hold_coefficient_);
+  const uint16_t micro = this->coeff_to_param_(this->auto_micro_coefficient_);
+
+  CmdFrameT cmd_frame;
+  cmd_frame.data_length = 6;
+  cmd_frame.header = CMD_FRAME_HEADER;
+  cmd_frame.command = CMD_AUTO_THRESHOLD_START;
+  memcpy(&cmd_frame.data[0], &trigger, sizeof(trigger));
+  memcpy(&cmd_frame.data[2], &hold, sizeof(hold));
+  memcpy(&cmd_frame.data[4], &micro, sizeof(micro));
+  cmd_frame.footer = CMD_FRAME_FOOTER;
+  ESP_LOGI(TAG, "Sending auto-threshold start (params 0x%04X 0x%04X 0x%04X)", trigger, hold, micro);
+  return this->send_cmd_from_array(cmd_frame);
+}
+
+int LD2402Component::query_auto_threshold_progress_() {
+  CmdFrameT cmd_frame;
+  cmd_frame.data_length = 0;
+  cmd_frame.header = CMD_FRAME_HEADER;
+  cmd_frame.command = CMD_AUTO_THRESHOLD_PROGRESS;
+  cmd_frame.footer = CMD_FRAME_FOOTER;
+  if (this->send_cmd_from_array(cmd_frame) != 0) {
+    return -1;
+  }
+  return static_cast<int>(this->cmd_reply_.ack_value);
+}
+
+int LD2402Component::save_params_to_flash_() {
+  CmdFrameT cmd_frame;
+  cmd_frame.data_length = 0;
+  cmd_frame.header = CMD_FRAME_HEADER;
+  cmd_frame.command = CMD_SAVE_PARAMS;
+  cmd_frame.footer = CMD_FRAME_FOOTER;
+  ESP_LOGI(TAG, "Sending parameter save command");
+  return this->send_cmd_from_array(cmd_frame);
+}
+
+int LD2402Component::reload_gate_thresholds_() {
+  for (uint8_t gate = 0; gate < TOTAL_GATES; gate++) {
+    delay_microseconds_safe(125);
+    if (this->get_gate_threshold_(gate) != 0) {
+      return LD2402_ERROR_TIMEOUT;
+    }
+  }
+  return 0;
+}
+
+void LD2402Component::publish_calibration_progress_(uint8_t progress) {
+  this->calibration_progress_ = progress;
+#ifdef USE_SENSOR
+  if (this->calibration_progress_sensor_ != nullptr) {
+    this->calibration_progress_sensor_->publish_state(progress);
+  }
+#endif
+}
+
+void LD2402Component::poll_auto_calibration_() {
+  if (!this->calibrating_) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (this->last_calibration_poll_ms_ != 0 && (now - this->last_calibration_poll_ms_) < CALIBRATION_POLL_INTERVAL_MS) {
+    return;
+  }
+  this->last_calibration_poll_ms_ = now;
+
+  const int progress = this->query_auto_threshold_progress_();
+  if (progress < 0) {
+    ESP_LOGW(TAG, "Auto-threshold progress query failed");
+    return;
+  }
+
+  this->publish_calibration_progress_(static_cast<uint8_t>(progress));
+  if (progress >= 100) {
+    this->finish_auto_calibration_();
+  }
+}
+
+void LD2402Component::finish_auto_calibration_() {
+  ESP_LOGI(TAG, "Auto-threshold generation complete");
+  if (this->reload_gate_thresholds_() == 0) {
+    memcpy(&this->new_config, &this->current_config, sizeof(this->current_config));
+#ifdef USE_NUMBER
+    this->init_gate_config_numbers();
+#endif
+  } else {
+    ESP_LOGW(TAG, "Failed to reload auto-generated gate thresholds");
+  }
+  if (this->save_params_to_flash_() != 0) {
+    ESP_LOGW(TAG, "Failed to persist auto-generated thresholds to flash");
+  }
+  this->set_system_mode(this->system_mode_);
+  this->set_config_mode(false);
+  this->calibrating_ = false;
+  this->calibration_interference_ = false;
+  this->publish_calibration_progress_(100);
+}
+
+void LD2402Component::handle_calibration_interference_report_(uint8_t *buffer, int len) {
+  if (len < 12) {
+    return;
+  }
+  this->calibration_interference_ = true;
+  ESP_LOGW(TAG, "Auto-threshold interference detected — remain still until calibration finishes");
+
+  const uint16_t status = 0x0001;
+  const uint16_t gate_bitmap = 0x0000;
+  CmdFrameT cmd_frame;
+  cmd_frame.data_length = 4;
+  cmd_frame.header = CMD_FRAME_HEADER;
+  cmd_frame.command = CMD_AUTO_THRESHOLD_INTERFERENCE | 0x0100;
+  memcpy(&cmd_frame.data[0], &status, sizeof(status));
+  memcpy(&cmd_frame.data[2], &gate_bitmap, sizeof(gate_bitmap));
+  cmd_frame.footer = CMD_FRAME_FOOTER;
+  this->write_cmd_frame_(cmd_frame);
 }
 
 #ifdef USE_NUMBER

@@ -5,12 +5,16 @@ from esphome.const import (
     CONF_ID,
     CONF_MOVING_DISTANCE,
     DEVICE_CLASS_DISTANCE,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     UNIT_CENTIMETER,
+    UNIT_PERCENT,
 )
 
 from .. import CONF_LD2402_ID, LD2402Component, ld2402_ns
 
 LD2402Sensor = ld2402_ns.class_("LD2402Sensor", sensor.Sensor, cg.Component)
+
+CONF_CALIBRATION_PROGRESS = "calibration_progress"
 
 CONFIG_SCHEMA = cv.All(
     cv.COMPONENT_SCHEMA.extend(
@@ -19,6 +23,11 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(CONF_LD2402_ID): cv.use_id(LD2402Component),
             cv.Optional(CONF_MOVING_DISTANCE): sensor.sensor_schema(
                 device_class=DEVICE_CLASS_DISTANCE, unit_of_measurement=UNIT_CENTIMETER
+            ),
+            cv.Optional(CONF_CALIBRATION_PROGRESS): sensor.sensor_schema(
+                unit_of_measurement=UNIT_PERCENT,
+                accuracy_decimals=0,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
         }
     ),
@@ -33,3 +42,6 @@ async def to_code(config):
         cg.add(var.set_distance_sensor(sens))
     ld2402 = await cg.get_variable(config[CONF_LD2402_ID])
     cg.add(ld2402.register_listener(var))
+    if calibration_progress := config.get(CONF_CALIBRATION_PROGRESS):
+        sens = await sensor.new_sensor(calibration_progress)
+        cg.add(ld2402.set_calibration_progress_sensor(sens))
