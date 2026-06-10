@@ -117,6 +117,7 @@ static constexpr uint8_t REPORT_FRAME_TOTAL_SIZE = 141;
 static constexpr uint8_t REPORT_FRAME_HEARTBEAT_SIZE = 26;
 static constexpr uint8_t REJECT_DUMP_INITIAL = 5;
 static constexpr uint32_t REJECT_DUMP_INTERVAL_MS = 30000;
+static constexpr uint32_t BUFFER_FULL_LOG_INTERVAL_MS = 10000;
 static constexpr uint8_t REPORT_PRESENCE_INDEX = 6;
 static constexpr uint8_t REPORT_DISTANCE_INDEX = 7;
 static constexpr uint8_t CMD_FRAME_COMMAND = 6;
@@ -313,17 +314,115 @@ int LD2402Component::expected_report_frame_size_(uint16_t length_field) {
   return 4 + 2 + length_field + 4;
 }
 
-bool LD2402Component::report_footer_is_complete_(const uint8_t *buffer, uint8_t buffer_pos) {
-  if (buffer_pos < REPORT_FRAME_HEARTBEAT_SIZE) {
-    return false;
+void LD2402Component::consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed) {
+  const uint8_t remainder = buffer_pos - consumed;
+  if (remainder > 0) {
+    memmove(buffer, &buffer[consumed], remainder);
   }
-  uint16_t length_field;
-  memcpy(&length_field, &buffer[4], sizeof(length_field));
-  if (length_field == REPORT_FRAME_LENGTH_FIELD) {
-    return buffer_pos == REPORT_FRAME_HEARTBEAT_SIZE || buffer_pos == REPORT_FRAME_TOTAL_SIZE;
+  buffer_pos = remainder;
+  buffer[buffer_pos] = 0;
+}
+
+void LD2402Component::trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from) {
+  for (uint8_t i = search_from; i + 3 < buffer_pos; i++) {
+    if (buffer[i] != 0xF4) {
+      continue;
+    }
+    if (memcmp(&buffer[i], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
+      continue;
+    }
+    const uint8_t remainder = buffer_pos - i;
+    memmove(buffer, &buffer[i], remainder);
+    buffer_pos = remainder;
+    buffer[buffer_pos] = 0;
+    ESP_LOGD(TAG, "Hunted report header at offset %u", i);
+    return;
   }
-  const int expected_len = this->expected_report_frame_size_(length_field);
-  return expected_len > 0 && buffer_pos == static_cast<uint8_t>(expected_len);
+
+  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
+  if (keep > 0 && keep < buffer_pos) {
+    memmove(buffer, &buffer[buffer_pos - keep], keep);
+  }
+  buffer_pos = keep;
+  buffer[buffer_pos] = 0;
+}
+
+void LD2402Component::process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos) {
+  if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
+    return;
+  }
+
+  while (buffer_pos >= REPORT_FRAME_HEARTBEAT_SIZE) {
+    if (memcmp(buffer, &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
+      this->trim_or_hunt_report_header_(buffer, buffer_pos, 0);
+      if (buffer_pos < REPORT_FRAME_HEARTBEAT_SIZE) {
+        return;
+      }
+      continue;
+    }
+
+    if (buffer_pos < 6) {
+      return;
+    }
+
+    uint16_t length_field;
+    memcpy(&length_field, &buffer[4], sizeof(length_field));
+
+    if (length_field == REPORT_FRAME_LENGTH_FIELD) {
+      const bool heartbeat_footer =
+          memcmp(&buffer[REPORT_FRAME_HEARTBEAT_SIZE - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0;
+      if (heartbeat_footer) {
+        if (this->validate_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE)) {
+          this->handle_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE);
+        } else {
+          this->log_rejected_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE);
+        }
+        this->consume_report_bytes_(buffer, buffer_pos, REPORT_FRAME_HEARTBEAT_SIZE);
+        continue;
+      }
+
+      if (buffer_pos < REPORT_FRAME_TOTAL_SIZE) {
+        return;
+      }
+
+      if (memcmp(&buffer[REPORT_FRAME_TOTAL_SIZE - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0) {
+        if (this->validate_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE)) {
+          this->handle_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE);
+        } else {
+          this->log_rejected_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE);
+        }
+        this->consume_report_bytes_(buffer, buffer_pos, REPORT_FRAME_TOTAL_SIZE);
+        continue;
+      }
+
+      ESP_LOGD(TAG, "0x0083 frame footer missing at %u bytes; hunting header", buffer_pos);
+      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+      continue;
+    }
+
+    const int expected_len = this->expected_report_frame_size_(length_field);
+    if (expected_len < REPORT_FRAME_HEARTBEAT_SIZE || expected_len > MAX_LINE_LENGTH) {
+      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+      continue;
+    }
+
+    const auto expected = static_cast<uint8_t>(expected_len);
+    if (buffer_pos < expected) {
+      return;
+    }
+
+    if (memcmp(&buffer[expected - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
+      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+      continue;
+    }
+
+    if (this->validate_detection_frame_(buffer, expected)) {
+      this->handle_detection_frame_(buffer, expected);
+    } else {
+      this->log_rejected_detection_frame_(buffer, expected);
+    }
+    this->consume_report_bytes_(buffer, buffer_pos, expected);
+  }
 }
 
 void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len) {
@@ -358,12 +457,6 @@ void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8
            format_hex_pretty(buffer, dump_len).c_str());
 }
 
-bool LD2402Component::advance_past_rejected_frame_(uint8_t *buffer, uint8_t &buffer_pos) {
-  buffer_pos = 0;
-  buffer[0] = 0;
-  return true;
-}
-
 bool LD2402Component::validate_cmd_frame_(const uint8_t *buffer, int len) const {
   if (len < 12) {
     return false;
@@ -385,57 +478,48 @@ void LD2402Component::resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos) {
     return;
   }
 
-  auto header_at = [&](uint8_t offset) -> bool {
-    if (offset + 3 >= buffer_pos) {
-      return false;
+  for (uint8_t i = 0; i + 3 < buffer_pos; i++) {
+    if (buffer[i] == 0xF4 && memcmp(&buffer[i], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) == 0) {
+      if (i == 0) {
+        return;
+      }
+      const uint8_t remainder = buffer_pos - i;
+      memmove(buffer, &buffer[i], remainder);
+      buffer_pos = remainder;
+      buffer[buffer_pos] = 0;
+      return;
     }
-    if (buffer[offset] == 0xF4 && memcmp(&buffer[offset], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) == 0) {
-      return true;
+    if (buffer[i] == 0xFD && memcmp(&buffer[i], &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) == 0) {
+      if (i == 0) {
+        return;
+      }
+      const uint8_t remainder = buffer_pos - i;
+      memmove(buffer, &buffer[i], remainder);
+      buffer_pos = remainder;
+      buffer[buffer_pos] = 0;
+      return;
     }
-    if (buffer[offset] == 0xFD && memcmp(&buffer[offset], &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) == 0) {
-      return true;
-    }
-    return false;
-  };
-
-  if (header_at(0)) {
-    return;
   }
 
-  for (uint8_t i = 1; i + 3 < buffer_pos; i++) {
-    if (!header_at(i)) {
-      continue;
-    }
-    const uint8_t remainder = buffer_pos - i;
-    memmove(buffer, &buffer[i], remainder);
-    buffer_pos = remainder;
-    buffer[buffer_pos] = 0;
-    ESP_LOGD(TAG, "Resynced UART buffer to header at offset %u", i);
-    return;
-  }
-
-  // Keep a short tail so a header split across reads can still be found.
-  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
-  if (keep > 0 && keep < buffer_pos) {
-    memmove(buffer, &buffer[buffer_pos - keep], keep);
-  }
-  buffer_pos = keep;
-  buffer[buffer_pos] = 0;
+  this->trim_or_hunt_report_header_(buffer, buffer_pos, 0);
 }
 
 void LD2402Component::append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
   if (buffer_pos >= len - 1) {
-    ESP_LOGW(TAG, "UART buffer full (%u bytes); resyncing", buffer_pos);
-    this->resync_buffer_(buffer, buffer_pos);
+    const uint32_t now = millis();
+    if (now - this->last_buffer_full_log_ms_ >= BUFFER_FULL_LOG_INTERVAL_MS) {
+      this->last_buffer_full_log_ms_ = now;
+      ESP_LOGW(TAG, "UART buffer full (%u bytes); resyncing", buffer_pos);
+    }
+    this->process_report_frames_(buffer, buffer_pos);
+    this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
     if (buffer_pos >= len - 1) {
       buffer_pos = 0;
+      buffer[0] = 0;
     }
   }
   buffer[buffer_pos++] = static_cast<uint8_t>(rx_data);
   buffer[buffer_pos] = 0;
-  if (buffer_pos >= 4) {
-    this->resync_buffer_(buffer, buffer_pos);
-  }
 }
 
 void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
@@ -460,30 +544,7 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
     return;
   }
 
-  if (memcmp(&buffer[buffer_pos - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
-    return;
-  }
-
-  if (!this->report_footer_is_complete_(buffer, buffer_pos)) {
-    return;
-  }
-
-  if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
-    ESP_LOGD(TAG, "Ignoring report frame while not in energy mode");
-    this->resync_buffer_(buffer, buffer_pos);
-    return;
-  }
-
-  if (this->validate_detection_frame_(buffer, buffer_pos)) {
-    if (buffer_pos == REPORT_FRAME_HEARTBEAT_SIZE) {
-      ESP_LOGD(TAG, "Heartbeat detection frame (%u bytes)", buffer_pos);
-    }
-    this->handle_detection_frame_(buffer, buffer_pos);
-    buffer_pos = 0;
-  } else {
-    this->log_rejected_detection_frame_(buffer, buffer_pos);
-    this->advance_past_rejected_frame_(buffer, buffer_pos);
-  }
+  this->process_report_frames_(buffer, buffer_pos);
 }
 
 void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {

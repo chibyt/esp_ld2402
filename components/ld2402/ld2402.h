@@ -17,8 +17,8 @@
 
 namespace esphome::ld2402 {
 
-// UART line buffer limits: longest frame (141 B) plus resync/search slack.
-static constexpr uint8_t MAX_LINE_LENGTH = 160;
+// UART line buffer limits: longest frame (141 B) plus multi-frame batch slack.
+static constexpr uint8_t MAX_LINE_LENGTH = 200;
 static constexpr uint8_t TOTAL_GATES = 16;
 
 class LD2402Listener {
@@ -141,11 +141,13 @@ class LD2402Component : public Component, public uart::UARTDevice {
   bool validate_detection_frame_(const uint8_t *buffer, int len) const;
   bool validate_cmd_frame_(const uint8_t *buffer, int len) const;
   static int expected_report_frame_size_(uint16_t length_field);
-  bool report_footer_is_complete_(const uint8_t *buffer, uint8_t buffer_pos);
   void log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len);
-  bool advance_past_rejected_frame_(uint8_t *buffer, uint8_t &buffer_pos);
+  void consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed);
+  void trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
+  void process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos);
   uint32_t reject_log_count_{0};
   uint32_t last_reject_dump_ms_{0};
+  uint32_t last_buffer_full_log_ms_{0};
 
 #ifdef USE_NUMBER
   number::Number *gate_timeout_number_{nullptr};
