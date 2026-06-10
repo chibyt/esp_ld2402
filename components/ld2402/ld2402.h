@@ -94,6 +94,8 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_auto_trigger_coefficient(float value) { this->auto_trigger_coefficient_ = value; }
   void set_auto_hold_coefficient(float value) { this->auto_hold_coefficient_ = value; }
   void set_auto_micro_coefficient(float value) { this->auto_micro_coefficient_ = value; }
+  void set_presence_timeout(uint16_t value) { this->config_presence_timeout_ = value; }
+  void set_max_gate_distance(uint16_t value) { this->config_max_gate_distance_ = value; }
 
   void send_module_restart();
   void restart_module_action();
@@ -206,6 +208,8 @@ class LD2402Component : public Component, public uart::UARTDevice {
   float auto_trigger_coefficient_{3.0f};
   float auto_hold_coefficient_{3.0f};
   float auto_micro_coefficient_{3.0f};
+  uint16_t config_presence_timeout_{30};
+  uint16_t config_max_gate_distance_{85};
   bool presence_{false};
   bool moving_target_{false};
   bool still_target_{false};

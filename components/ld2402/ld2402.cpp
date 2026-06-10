@@ -152,8 +152,10 @@ float LD2402Component::get_setup_priority() const { return setup_priority::BUS; 
 void LD2402Component::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "LD2402:\n"
-                "  Firmware version: %7s",
-                this->firmware_ver_);
+                "  Firmware version: %7s\n"
+                "  Presence timeout: %u s\n"
+                "  Max gate distance: %u",
+                this->firmware_ver_, this->config_presence_timeout_, this->config_max_gate_distance_);
 #ifdef USE_NUMBER
   ESP_LOGCONFIG(TAG, "Number:");
   LOG_NUMBER("  ", "Gate Timeout:", this->gate_timeout_number_);
@@ -208,6 +210,10 @@ void LD2402Component::setup() {
     delay_microseconds_safe(125);
     this->get_gate_threshold_(gate);
   }
+
+  this->current_config.max_gate = this->config_max_gate_distance_;
+  this->current_config.timeout = this->config_presence_timeout_;
+  this->set_max_distance_and_timeout(this->config_max_gate_distance_, this->config_presence_timeout_);
 
   memcpy(&this->new_config, &this->current_config, sizeof(this->current_config));
   this->set_mode_(CMD_SYSTEM_MODE_ENERGY);
