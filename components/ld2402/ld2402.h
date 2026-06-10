@@ -80,7 +80,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #endif
 #ifdef USE_BUTTON
   void set_apply_config_button(button::Button *button) { this->apply_config_button_ = button; };
-  void set_revert_config_button(button::Button *button) { this->revert_config_button_ = button; };
   void set_auto_calibrate_button(button::Button *button) { this->auto_calibrate_button_ = button; };
   void set_save_config_button(button::Button *button) { this->save_config_button_ = button; };
   void set_revert_config_button(button::Button *button) { this->revert_config_button_ = button; };
