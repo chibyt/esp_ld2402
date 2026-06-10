@@ -175,8 +175,23 @@ void LD2402Component::dump_config() {
 }
 
 void LD2402Component::setup() {
-  if (this->set_config_mode(true) == LD2402_ERROR_TIMEOUT) {
-    ESP_LOGE(TAG, ESP_LOG_MSG_COMM_FAIL);
+  delay(500);
+  this->drain_uart_();
+
+  uint8_t error = LD2402_ERROR_TIMEOUT;
+  for (uint8_t attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      delay(500);
+      this->drain_uart_();
+    }
+    error = this->set_config_mode(true);
+    if (error == 0) {
+      break;
+    }
+    ESP_LOGW(TAG, "Config mode enable attempt %u timed out", attempt + 1);
+  }
+  if (error != 0) {
+    ESP_LOGE(TAG, "LD2402 config mode enable failed after retries");
     this->mark_failed();
     return;
   }
@@ -392,6 +407,37 @@ void LD2402Component::trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buff
   buffer[buffer_pos] = 0;
 }
 
+void LD2402Component::trim_or_hunt_cmd_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from) {
+  for (uint8_t i = search_from; i + 3 < buffer_pos; i++) {
+    if (buffer[i] != 0xFD) {
+      continue;
+    }
+    if (memcmp(&buffer[i], &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) != 0) {
+      continue;
+    }
+    const uint8_t remainder = buffer_pos - i;
+    memmove(buffer, &buffer[i], remainder);
+    buffer_pos = remainder;
+    buffer[buffer_pos] = 0;
+    return;
+  }
+
+  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
+  if (keep > 0 && keep < buffer_pos) {
+    memmove(buffer, &buffer[buffer_pos - keep], keep);
+  }
+  buffer_pos = keep;
+  buffer[buffer_pos] = 0;
+}
+
+void LD2402Component::drain_uart_() {
+  while (this->available()) {
+    this->read();
+  }
+  this->detection_buffer_pos_ = 0;
+  this->cmd_buffer_pos_ = 0;
+}
+
 void LD2402Component::process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos) {
   if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
     return;
@@ -556,8 +602,12 @@ void LD2402Component::append_rx_byte_(int rx_data, uint8_t *buffer, int len, uin
       this->last_buffer_full_log_ms_ = now;
       ESP_LOGW(TAG, "UART buffer full (%u bytes); resyncing", buffer_pos);
     }
-    this->process_report_frames_(buffer, buffer_pos);
-    this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+    if (this->cmd_active_) {
+      this->trim_or_hunt_cmd_header_(buffer, buffer_pos, 1);
+    } else {
+      this->process_report_frames_(buffer, buffer_pos);
+      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+    }
     if (buffer_pos >= len - 1) {
       buffer_pos = 0;
       buffer[0] = 0;
@@ -593,6 +643,11 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
       ESP_LOGW(TAG, "Misaligned command frame (%u bytes); resyncing", buffer_pos);
       this->resync_buffer_(buffer, buffer_pos);
     }
+    return;
+  }
+
+  if (this->cmd_active_) {
+    this->trim_or_hunt_cmd_header_(buffer, buffer_pos, 0);
     return;
   }
 
@@ -790,6 +845,10 @@ int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
   }
   if (error == LD2402_ERROR_TIMEOUT) {
     this->handle_cmd_error(error);
+  }
+  if (!this->cmd_reply_.ack) {
+    this->cmd_active_ = false;
+    this->cmd_buffer_pos_ = 0;
   }
   return error;
 }

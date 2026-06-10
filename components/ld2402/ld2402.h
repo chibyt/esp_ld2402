@@ -165,6 +165,8 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len);
   void consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed);
   void trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
+  void trim_or_hunt_cmd_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
+  void drain_uart_();
   void process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos);
   void handle_calibration_interference_report_(uint8_t *buffer, int len);
   void poll_auto_calibration_();
@@ -191,7 +193,7 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #endif
 
   uint16_t distance_{0};
-  uint16_t system_mode_;
+  uint16_t system_mode_{0};
   uint8_t detection_buffer_pos_{0};
   uint8_t cmd_buffer_pos_{0};
   uint8_t buffer_data_[MAX_LINE_LENGTH];
