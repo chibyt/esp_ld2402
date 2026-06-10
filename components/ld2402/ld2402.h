@@ -140,6 +140,11 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos);
   bool validate_detection_frame_(const uint8_t *buffer, int len) const;
   bool validate_cmd_frame_(const uint8_t *buffer, int len) const;
+  static int expected_report_frame_size_(uint16_t length_field);
+  void log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len);
+  bool advance_past_rejected_frame_(uint8_t *buffer, uint8_t &buffer_pos);
+  uint32_t reject_log_count_{0};
+  uint32_t last_reject_dump_ms_{0};
 
 #ifdef USE_NUMBER
   number::Number *gate_timeout_number_{nullptr};

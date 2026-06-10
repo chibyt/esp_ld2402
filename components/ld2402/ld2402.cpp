@@ -113,7 +113,11 @@ static constexpr uint32_t CMD_FRAME_HEADER = 0xFAFBFCFD;
 static constexpr uint32_t REPORT_FRAME_HEADER = 0xF1F2F3F4;
 static constexpr uint32_t REPORT_FRAME_FOOTER = 0xF5F6F7F8;
 static constexpr uint16_t REPORT_FRAME_LENGTH_FIELD = 0x0083;
+static constexpr uint16_t REPORT_FRAME_SHORT_LENGTH_FIELD = 0x0010;
 static constexpr uint8_t REPORT_FRAME_TOTAL_SIZE = 141;
+static constexpr uint8_t REPORT_FRAME_SHORT_SIZE = 26;
+static constexpr uint8_t REJECT_DUMP_INITIAL = 5;
+static constexpr uint32_t REJECT_DUMP_INTERVAL_MS = 30000;
 static constexpr uint8_t REPORT_PRESENCE_INDEX = 6;
 static constexpr uint8_t REPORT_DISTANCE_INDEX = 7;
 static constexpr uint8_t CMD_FRAME_COMMAND = 6;
@@ -300,6 +304,76 @@ bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) 
   return true;
 }
 
+int LD2402Component::expected_report_frame_size_(uint16_t length_field) {
+  if (length_field == REPORT_FRAME_LENGTH_FIELD) {
+    return REPORT_FRAME_TOTAL_SIZE;
+  }
+  if (length_field == REPORT_FRAME_SHORT_LENGTH_FIELD) {
+    return REPORT_FRAME_SHORT_SIZE;
+  }
+  if (length_field > 140) {
+    return -1;
+  }
+  return 4 + 2 + length_field + 4;
+}
+
+void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len) {
+  this->reject_log_count_++;
+  const uint32_t now = millis();
+  const bool dump_full =
+      (this->reject_log_count_ <= REJECT_DUMP_INITIAL) || (now - this->last_reject_dump_ms_ >= REJECT_DUMP_INTERVAL_MS);
+
+  uint16_t length_field = 0;
+  if (len >= 6) {
+    memcpy(&length_field, &buffer[4], sizeof(length_field));
+  }
+  const uint8_t presence = len > REPORT_PRESENCE_INDEX ? buffer[REPORT_PRESENCE_INDEX] : 0xFF;
+  uint16_t distance = 0;
+  if (len >= REPORT_DISTANCE_INDEX + sizeof(distance)) {
+    memcpy(&distance, &buffer[REPORT_DISTANCE_INDEX], sizeof(distance));
+  }
+  const int expected_len = this->expected_report_frame_size_(length_field);
+
+  if (!dump_full) {
+    if (this->reject_log_count_ == REJECT_DUMP_INITIAL + 1) {
+      ESP_LOGW(TAG, "Rejected detection logging throttled (%u frames so far)", this->reject_log_count_);
+    }
+    return;
+  }
+
+  this->last_reject_dump_ms_ = now;
+  const uint8_t dump_len = std::min<uint8_t>(len, MAX_LINE_LENGTH);
+  ESP_LOGW(TAG,
+           "Rejected detection #%u: buf_len=%u length_field=0x%04X expected_len=%d presence=0x%02X dist=%u hex=%s",
+           this->reject_log_count_, len, length_field, expected_len, presence, distance,
+           format_hex_pretty(buffer, dump_len).c_str());
+}
+
+bool LD2402Component::advance_past_rejected_frame_(uint8_t *buffer, uint8_t &buffer_pos) {
+  if (buffer_pos < 6) {
+    buffer_pos = 0;
+    return true;
+  }
+
+  uint16_t length_field;
+  memcpy(&length_field, &buffer[4], sizeof(length_field));
+  const int expected_len = this->expected_report_frame_size_(length_field);
+  if (expected_len < REPORT_FRAME_SHORT_SIZE || expected_len > MAX_LINE_LENGTH) {
+    return false;
+  }
+  if (buffer_pos < static_cast<uint8_t>(expected_len)) {
+    return false;
+  }
+
+  const uint8_t remainder = buffer_pos - static_cast<uint8_t>(expected_len);
+  if (remainder > 0) {
+    memmove(buffer, &buffer[expected_len], remainder);
+  }
+  buffer_pos = remainder;
+  buffer[buffer_pos] = 0;
+  return true;
+}
+
 bool LD2402Component::validate_cmd_frame_(const uint8_t *buffer, int len) const {
   if (len < 12) {
     return false;
@@ -410,8 +484,11 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
     this->handle_detection_frame_(buffer, buffer_pos);
     buffer_pos = 0;
   } else {
-    ESP_LOGW(TAG, "Misaligned detection frame (%u bytes); resyncing", buffer_pos);
-    this->resync_buffer_(buffer, buffer_pos);
+    this->log_rejected_detection_frame_(buffer, buffer_pos);
+    if (!this->advance_past_rejected_frame_(buffer, buffer_pos)) {
+      ESP_LOGD(TAG, "Misaligned detection frame (%u bytes); resyncing", buffer_pos);
+      this->resync_buffer_(buffer, buffer_pos);
+    }
   }
 }
 
