@@ -113,9 +113,8 @@ static constexpr uint32_t CMD_FRAME_HEADER = 0xFAFBFCFD;
 static constexpr uint32_t REPORT_FRAME_HEADER = 0xF1F2F3F4;
 static constexpr uint32_t REPORT_FRAME_FOOTER = 0xF5F6F7F8;
 static constexpr uint16_t REPORT_FRAME_LENGTH_FIELD = 0x0083;
-static constexpr uint16_t REPORT_FRAME_SHORT_LENGTH_FIELD = 0x0010;
 static constexpr uint8_t REPORT_FRAME_TOTAL_SIZE = 141;
-static constexpr uint8_t REPORT_FRAME_SHORT_SIZE = 26;
+static constexpr uint8_t REPORT_FRAME_HEARTBEAT_SIZE = 26;
 static constexpr uint8_t REJECT_DUMP_INITIAL = 5;
 static constexpr uint32_t REJECT_DUMP_INTERVAL_MS = 30000;
 static constexpr uint8_t REPORT_PRESENCE_INDEX = 6;
@@ -275,7 +274,7 @@ void LD2402Component::loop() {
 }
 
 bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) const {
-  if (len != REPORT_FRAME_TOTAL_SIZE) {
+  if (len != REPORT_FRAME_TOTAL_SIZE && len != REPORT_FRAME_HEARTBEAT_SIZE) {
     return false;
   }
   if (memcmp(buffer, &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
@@ -306,15 +305,25 @@ bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) 
 
 int LD2402Component::expected_report_frame_size_(uint16_t length_field) {
   if (length_field == REPORT_FRAME_LENGTH_FIELD) {
-    return REPORT_FRAME_TOTAL_SIZE;
-  }
-  if (length_field == REPORT_FRAME_SHORT_LENGTH_FIELD) {
-    return REPORT_FRAME_SHORT_SIZE;
+    return -1;  // 0x0083 uses either heartbeat (26) or full energy (141) — see buffer_pos
   }
   if (length_field > 140) {
     return -1;
   }
   return 4 + 2 + length_field + 4;
+}
+
+bool LD2402Component::report_footer_is_complete_(const uint8_t *buffer, uint8_t buffer_pos) {
+  if (buffer_pos < REPORT_FRAME_HEARTBEAT_SIZE) {
+    return false;
+  }
+  uint16_t length_field;
+  memcpy(&length_field, &buffer[4], sizeof(length_field));
+  if (length_field == REPORT_FRAME_LENGTH_FIELD) {
+    return buffer_pos == REPORT_FRAME_HEARTBEAT_SIZE || buffer_pos == REPORT_FRAME_TOTAL_SIZE;
+  }
+  const int expected_len = this->expected_report_frame_size_(length_field);
+  return expected_len > 0 && buffer_pos == static_cast<uint8_t>(expected_len);
 }
 
 void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len) {
@@ -350,27 +359,8 @@ void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8
 }
 
 bool LD2402Component::advance_past_rejected_frame_(uint8_t *buffer, uint8_t &buffer_pos) {
-  if (buffer_pos < 6) {
-    buffer_pos = 0;
-    return true;
-  }
-
-  uint16_t length_field;
-  memcpy(&length_field, &buffer[4], sizeof(length_field));
-  const int expected_len = this->expected_report_frame_size_(length_field);
-  if (expected_len < REPORT_FRAME_SHORT_SIZE || expected_len > MAX_LINE_LENGTH) {
-    return false;
-  }
-  if (buffer_pos < static_cast<uint8_t>(expected_len)) {
-    return false;
-  }
-
-  const uint8_t remainder = buffer_pos - static_cast<uint8_t>(expected_len);
-  if (remainder > 0) {
-    memmove(buffer, &buffer[expected_len], remainder);
-  }
-  buffer_pos = remainder;
-  buffer[buffer_pos] = 0;
+  buffer_pos = 0;
+  buffer[0] = 0;
   return true;
 }
 
@@ -474,6 +464,10 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
     return;
   }
 
+  if (!this->report_footer_is_complete_(buffer, buffer_pos)) {
+    return;
+  }
+
   if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
     ESP_LOGD(TAG, "Ignoring report frame while not in energy mode");
     this->resync_buffer_(buffer, buffer_pos);
@@ -481,14 +475,14 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
   }
 
   if (this->validate_detection_frame_(buffer, buffer_pos)) {
+    if (buffer_pos == REPORT_FRAME_HEARTBEAT_SIZE) {
+      ESP_LOGD(TAG, "Heartbeat detection frame (%u bytes)", buffer_pos);
+    }
     this->handle_detection_frame_(buffer, buffer_pos);
     buffer_pos = 0;
   } else {
     this->log_rejected_detection_frame_(buffer, buffer_pos);
-    if (!this->advance_past_rejected_frame_(buffer, buffer_pos)) {
-      ESP_LOGD(TAG, "Misaligned detection frame (%u bytes); resyncing", buffer_pos);
-      this->resync_buffer_(buffer, buffer_pos);
-    }
+    this->advance_past_rejected_frame_(buffer, buffer_pos);
   }
 }
 
