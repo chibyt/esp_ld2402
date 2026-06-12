@@ -4,6 +4,8 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/helpers.h"
+#include <cmath>
+#include <cstdint>
 #include <span>
 #ifdef USE_TEXT_SENSOR
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -23,6 +25,25 @@ namespace esphome::ld2402 {
 // UART line buffer: text lines plus command-frame slack.
 static constexpr uint8_t MAX_LINE_LENGTH = 128;
 static constexpr uint8_t TOTAL_GATES = 16;
+
+// HLK-LD2402 threshold conversion: host N = 10*log10(serial M), serial M = 10^(N/10)
+inline float threshold_serial_to_host(uint32_t serial) {
+  if (serial == 0) {
+    return 0.0f;
+  }
+  return 10.0f * log10f(static_cast<float>(serial));
+}
+
+inline uint32_t threshold_host_to_serial(float host) {
+  if (host <= 0.0f) {
+    return 0;
+  }
+  const double serial = pow(10.0, static_cast<double>(host) / 10.0);
+  if (serial >= static_cast<double>(UINT32_MAX)) {
+    return UINT32_MAX;
+  }
+  return static_cast<uint32_t>(serial + 0.5);
+}
 
 class LD2402Listener {
  public:
@@ -67,11 +88,12 @@ class LD2402Component : public Component, public uart::UARTDevice {
   bool is_gate_select() { return gate_select_number_ != nullptr; };
   uint8_t get_gate_select_value() { return static_cast<uint8_t>(this->gate_select_number_->state); };
   void publish_gate_move_threshold(uint8_t gate) {
-    // With gate_select we only use 1 number pointer, thus we hard code [0]
-    this->gate_move_threshold_numbers_[0]->publish_state(this->new_config.move_thresh[gate]);
+    this->gate_move_threshold_numbers_[0]->publish_state(
+        threshold_serial_to_host(this->new_config.move_thresh[gate]));
   };
   void publish_gate_still_threshold(uint8_t gate) {
-    this->gate_still_threshold_numbers_[0]->publish_state(this->new_config.still_thresh[gate]);
+    this->gate_still_threshold_numbers_[0]->publish_state(
+        threshold_serial_to_host(this->new_config.still_thresh[gate]));
   };
   void init_gate_config_numbers();
   void refresh_gate_config_numbers();

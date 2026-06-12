@@ -37,10 +37,11 @@ LD2402MoveThresholdNumbers::LD2402MoveThresholdNumbers(uint8_t gate) : gate_(gat
 
 void LD2402MoveThresholdNumbers::control(float move_threshold) {
   this->publish_state(move_threshold);
+  const uint32_t serial = threshold_host_to_serial(move_threshold);
   if (!this->parent_->is_gate_select()) {
-    this->parent_->new_config.move_thresh[this->gate_] = move_threshold;
+    this->parent_->new_config.move_thresh[this->gate_] = serial;
   } else {
-    this->parent_->new_config.move_thresh[this->parent_->get_gate_select_value()] = move_threshold;
+    this->parent_->new_config.move_thresh[this->parent_->get_gate_select_value()] = serial;
   }
 }
 
@@ -48,10 +49,11 @@ LD2402StillThresholdNumbers::LD2402StillThresholdNumbers(uint8_t gate) : gate_(g
 
 void LD2402StillThresholdNumbers::control(float still_threshold) {
   this->publish_state(still_threshold);
+  const uint32_t serial = threshold_host_to_serial(still_threshold);
   if (!this->parent_->is_gate_select()) {
-    this->parent_->new_config.still_thresh[this->gate_] = still_threshold;
+    this->parent_->new_config.still_thresh[this->gate_] = serial;
   } else {
-    this->parent_->new_config.still_thresh[this->parent_->get_gate_select_value()] = still_threshold;
+    this->parent_->new_config.still_thresh[this->parent_->get_gate_select_value()] = serial;
   }
 }
 

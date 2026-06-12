@@ -35,6 +35,9 @@ CONF_GATE_MOVE_SENSITIVITY = "gate_move_sensitivity"
 CONF_GATE_STILL_SENSITIVITY = "gate_still_sensitivity"
 CONF_GATE_SELECT = "gate_select"
 CONF_PRESENCE_TIMEOUT = "presence_timeout"
+THRESHOLD_MIN = 0
+THRESHOLD_MAX = 100
+THRESHOLD_STEP = 0.5
 GATE_GROUP = "gate_group"
 TIMEOUT_GROUP = "timeout_group"
 
@@ -64,11 +67,13 @@ CONFIG_SCHEMA = cv.Schema(
             LD2402StillThresholdNumbers,
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon=ICON_MOTION_SENSOR,
+            accuracy_decimals=1,
         ),
         cv.Inclusive(CONF_MOVE_THRESHOLD, GATE_GROUP): number.number_schema(
             LD2402MoveThresholdNumbers,
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon=ICON_MOTION_SENSOR,
+            accuracy_decimals=1,
         ),
         cv.Optional(CONF_GATE_MOVE_SENSITIVITY): number.number_schema(
             LD2402MoveSensFactorNumber,
@@ -92,11 +97,13 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
                     LD2402MoveThresholdNumbers,
                     entity_category=ENTITY_CATEGORY_CONFIG,
                     icon=ICON_MOTION_SENSOR,
+                    accuracy_decimals=1,
                 ),
                 cv.Required(CONF_STILL_THRESHOLD): number.number_schema(
                     LD2402StillThresholdNumbers,
                     entity_category=ENTITY_CATEGORY_CONFIG,
                     icon=ICON_MOTION_SENSOR,
+                    accuracy_decimals=1,
                 ),
             }
         )
@@ -139,14 +146,22 @@ async def to_code(config):
         if gate_still_threshold := config.get(CONF_STILL_THRESHOLD):
             n = cg.new_Pvariable(gate_still_threshold[CONF_ID])
             await number.register_number(
-                n, gate_still_threshold, min_value=0, max_value=65535, step=25
+                n,
+                gate_still_threshold,
+                min_value=THRESHOLD_MIN,
+                max_value=THRESHOLD_MAX,
+                step=THRESHOLD_STEP,
             )
             await cg.register_parented(n, config[CONF_LD2402_ID])
             cg.add(LD2402_component.set_gate_still_threshold_numbers(0, n))
         if gate_move_threshold := config.get(CONF_MOVE_THRESHOLD):
             n = cg.new_Pvariable(gate_move_threshold[CONF_ID])
             await number.register_number(
-                n, gate_move_threshold, min_value=0, max_value=65535, step=25
+                n,
+                gate_move_threshold,
+                min_value=THRESHOLD_MIN,
+                max_value=THRESHOLD_MAX,
+                step=THRESHOLD_STEP,
             )
             await cg.register_parented(n, config[CONF_LD2402_ID])
             cg.add(LD2402_component.set_gate_move_threshold_numbers(0, n))
@@ -156,7 +171,11 @@ async def to_code(config):
                 move_config = gate_conf[CONF_MOVE_THRESHOLD]
                 n = cg.new_Pvariable(move_config[CONF_ID], x)
                 await number.register_number(
-                    n, move_config, min_value=0, max_value=65535, step=25
+                    n,
+                    move_config,
+                    min_value=THRESHOLD_MIN,
+                    max_value=THRESHOLD_MAX,
+                    step=THRESHOLD_STEP,
                 )
                 await cg.register_parented(n, config[CONF_LD2402_ID])
                 cg.add(LD2402_component.set_gate_move_threshold_numbers(x, n))
@@ -164,7 +183,11 @@ async def to_code(config):
                 still_config = gate_conf[CONF_STILL_THRESHOLD]
                 n = cg.new_Pvariable(still_config[CONF_ID], x)
                 await number.register_number(
-                    n, still_config, min_value=0, max_value=65535, step=25
+                    n,
+                    still_config,
+                    min_value=THRESHOLD_MIN,
+                    max_value=THRESHOLD_MAX,
+                    step=THRESHOLD_STEP,
                 )
                 await cg.register_parented(n, config[CONF_LD2402_ID])
                 cg.add(LD2402_component.set_gate_still_threshold_numbers(x, n))

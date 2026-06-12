@@ -1051,11 +1051,11 @@ void LD2402Component::init_gate_config_numbers() {
   for (uint8_t gate = 0; gate < TOTAL_GATES; gate++) {
     if (this->gate_still_threshold_numbers_[gate] != nullptr) {
       this->gate_still_threshold_numbers_[gate]->publish_state(
-          static_cast<uint16_t>(this->current_config.still_thresh[gate]));
+          threshold_serial_to_host(this->current_config.still_thresh[gate]));
     }
     if (this->gate_move_threshold_numbers_[gate] != nullptr) {
       this->gate_move_threshold_numbers_[gate]->publish_state(
-          static_cast<uint16_t>(this->current_config.move_thresh[gate]));
+          threshold_serial_to_host(this->current_config.move_thresh[gate]));
     }
   }
 }
