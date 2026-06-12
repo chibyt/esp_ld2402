@@ -27,8 +27,6 @@ static constexpr uint8_t TOTAL_GATES = 16;
 class LD2402Listener {
  public:
   virtual void on_presence(bool presence){};
-  virtual void on_moving_target(bool moving_target){};
-  virtual void on_still_target(bool still_target){};
   virtual void on_distance(uint16_t distance){};
   virtual void on_fw_version(std::string &fw){};
 };
@@ -147,11 +145,7 @@ class LD2402Component : public Component, public uart::UARTDevice {
   uint16_t get_mode_() { return this->system_mode_; };
   void set_mode_(uint16_t mode) { this->system_mode_ = mode; };
   bool get_presence_() { return this->presence_; };
-  bool get_moving_target_() { return this->moving_target_; };
-  bool get_still_target_() { return this->still_target_; };
   void set_presence_(bool presence) { this->presence_ = presence; };
-  void set_moving_target_(bool moving_target) { this->moving_target_ = moving_target; };
-  void set_still_target_(bool still_target) { this->still_target_ = still_target; };
   uint16_t get_distance_() { return this->distance_; };
   void set_distance_(uint16_t distance) { this->distance_ = distance; };
   void handle_detection_frame_(uint8_t *buffer, int len);
@@ -211,8 +205,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
   uint16_t config_presence_timeout_{30};
   uint16_t config_max_gate_distance_{85};
   bool presence_{false};
-  bool moving_target_{false};
-  bool still_target_{false};
   CmdReplyT cmd_reply_;
   std::vector<LD2402Listener *> listeners_{};
 };

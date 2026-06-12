@@ -129,9 +129,6 @@ static constexpr uint8_t CMD_FRAME_COMMAND = 6;
 static constexpr uint8_t CMD_FRAME_DATA_LENGTH = 4;
 static constexpr uint8_t CMD_ERROR_WORD = 8;
 
-static constexpr uint8_t MOVE_BITMASK = 0x01;
-static constexpr uint8_t STILL_BITMASK = 0x02;
-
 static constexpr const char *const ERR_MESSAGE[] = {
     "None",
     "Unknown",
@@ -664,42 +661,11 @@ void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
   const uint8_t index = REPORT_PRESENCE_INDEX;
   uint16_t range;
 
-  /*
-    Target states:
-    0x00 = No target
-    0x01 = Moving target
-    0x02 = Still target
-  */
-
   const bool prev_presence = this->presence_;
-  const bool prev_moving = this->moving_target_;
-  const bool prev_still = this->still_target_;
-
-  const uint8_t target_state = buffer[index];
-  if (target_state != 0x00) {
-    this->set_presence_(true);
-    this->set_moving_target_(target_state & MOVE_BITMASK);
-    this->set_still_target_((target_state & STILL_BITMASK) != 0);
-  } else {
-    this->set_presence_(false);
-    this->set_moving_target_(false);
-    this->set_still_target_(false);
-  }
-
-  const bool presence_edge = prev_presence != this->presence_;
-  const bool moving_edge = prev_moving != this->moving_target_;
-  const bool still_edge = prev_still != this->still_target_;
-  if (presence_edge || moving_edge || still_edge) {
+  this->set_presence_(buffer[index] != 0x00);
+  if (prev_presence != this->presence_) {
     for (auto &listener : this->listeners_) {
-      if (presence_edge) {
-        listener->on_presence(this->presence_);
-      }
-      if (moving_edge) {
-        listener->on_moving_target(this->moving_target_);
-      }
-      if (still_edge) {
-        listener->on_still_target(this->still_target_);
-      }
+      listener->on_presence(this->presence_);
     }
   }
 
