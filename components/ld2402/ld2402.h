@@ -20,8 +20,8 @@
 
 namespace esphome::ld2402 {
 
-// UART line buffer limits: longest frame (141 B) plus multi-frame batch slack.
-static constexpr uint8_t MAX_LINE_LENGTH = 200;
+// UART line buffer: text lines plus command-frame slack.
+static constexpr uint8_t MAX_LINE_LENGTH = 128;
 static constexpr uint8_t TOTAL_GATES = 16;
 
 class LD2402Listener {
@@ -148,22 +148,17 @@ class LD2402Component : public Component, public uart::UARTDevice {
   void set_presence_(bool presence) { this->presence_ = presence; };
   uint16_t get_distance_() { return this->distance_; };
   void set_distance_(uint16_t distance) { this->distance_ = distance; };
-  void handle_detection_frame_(uint8_t *buffer, int len);
+  void handle_text_line_(const char *line);
   void handle_ack_data_(uint8_t *buffer, int len);
   int write_cmd_frame_(CmdFrameT cmd_frame);
   void readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
   void read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer);
   void append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos);
   void resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos);
-  bool validate_detection_frame_(const uint8_t *buffer, int len) const;
-  bool validate_cmd_frame_(const uint8_t *buffer, int len) const;
-  static int expected_report_frame_size_(uint16_t length_field);
-  void log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len);
-  void consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed);
-  void trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
   void trim_or_hunt_cmd_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from);
+  bool validate_cmd_frame_(const uint8_t *buffer, int len) const;
   void drain_uart_();
-  void process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos);
+  void process_text_lines_(uint8_t *buffer, uint8_t &buffer_pos);
   void handle_calibration_interference_report_(uint8_t *buffer, int len);
   void poll_auto_calibration_();
   void finish_auto_calibration_();
@@ -174,8 +169,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
   int reload_gate_thresholds_();
   static uint16_t coeff_to_param_(float coefficient);
   static int parse_calibration_progress_(const uint8_t *buffer, int len);
-  uint32_t reject_log_count_{0};
-  uint32_t last_reject_dump_ms_{0};
   uint32_t last_buffer_full_log_ms_{0};
 
 #ifdef USE_NUMBER
@@ -189,7 +182,7 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #endif
 
   uint16_t distance_{0};
-  uint16_t system_mode_{0};
+  uint16_t system_mode_{0x0064};
   uint8_t detection_buffer_pos_{0};
   uint8_t cmd_buffer_pos_{0};
   uint8_t buffer_data_[MAX_LINE_LENGTH];

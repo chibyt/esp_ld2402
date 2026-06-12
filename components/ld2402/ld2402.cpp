@@ -1,6 +1,8 @@
 #include "ld2402.h"
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
+#include <cctype>
+#include <strings.h>
 
 /*
 Configure commands - little endian
@@ -35,22 +37,10 @@ Configure system parameters:
 UART Tx: FD FC FB FA 08 00 12 00 00 00 64 00 00 00 04 03 02 01  Set system parms
 Command = 12 00 - uint16_t 0x0012, Param
 There are three documented parameters for modes:
-  00 64 = Basic status mode (not used)
-    This mode outputs text as presence "ON" or  "OFF" and "Range XXXX"
-    where XXXX is a decimal value for distance in cm
-  00 04 = Energy output mode
-    This mode outputs detailed signal energy values for each gate and the target distance.
-    The data format consist of the following.
-
-    Header HH, Length LL, Presence PP, Distance DD, 32 * 4byte Gate Energies EEx EEx EEx EEx, Footer FF
-    HH HH HH HH LL LL PP DD DD EE0 EE0 EE0 EE0 EE1 EE1 .. 32x4   .. FF FF FF FF
-    F4 F3 F2 F1 83 00 00 00 00 00  00  00  00  00  00  .. .. .. ..  F8 F7 F6 F5
-
-    distance: 66 00 (little endian format, converted to decimal: 102cm)
-
-    energy value (ignored): example F6 11 00 00 (little endian format, converted to 000011F6, in decimal it is 4598, energy value: (10 ∗ log10 4598) ≈ 36.62)
-
-    example frame: F4,F3,F2,F1,83,00,01,CA,01,00,00,00,00,00,00,00,00,65,05,00,00,71,03,00,00,0F,03,00,00,F6,01,00,00,3D,02,00,00,F7,02,00,00,28,03,00,00,28,02,00,00,91,02,00,00,87,02,00,00,D6,01,00,00,C5,01,00,00,15,02,00,00,3E,02,00,00,00,00,00,00,00,00,00,00,EE,07,00,00,F8,05,00,00,10,07,00,00,D7,02,00,00,EA,04,00,00,55,06,00,00,BA,02,00,00,B5,01,00,00,8B,02,00,00,5D,03,00,00,50,01,00,00,D6,00,00,00,2C,01,00,00,59,01,00,00,F8,F7,F6,F5
+  00 64 = Basic text mode (default)
+    No target: "OFF" + CRLF (4F 46 46 0D 0A)
+    Target:    "distance:" + decimal cm + CRLF (e.g. distance:436)
+  00 04 = Energy output mode (not used)
 
 
 Configure gate sensitivity parameters:
@@ -75,7 +65,7 @@ static constexpr uint16_t CMD_READ_ABD_PARAM = 0x0008;
 static constexpr uint16_t CMD_READ_VERSION = 0x0000;
 static constexpr uint16_t CMD_RESTART = 0x0068;
 static constexpr uint16_t CMD_SYSTEM_MODE = 0x0000;
-static constexpr uint16_t CMD_SYSTEM_MODE_ENERGY = 0x0004;
+static constexpr uint16_t CMD_SYSTEM_MODE_BASIC = 0x0064;
 static constexpr uint16_t CMD_WRITE_ABD_PARAM = 0x0007;
 static constexpr uint16_t CMD_WRITE_SYS_PARAM = 0x0012;
 static constexpr uint16_t CMD_AUTO_THRESHOLD_START = 0x0009;
@@ -115,16 +105,7 @@ static constexpr uint16_t FACTORY_MAX_GATE = 85;
 // COMMAND_BYTE Header & Footer
 static constexpr uint32_t CMD_FRAME_FOOTER = 0x01020304;
 static constexpr uint32_t CMD_FRAME_HEADER = 0xFAFBFCFD;
-static constexpr uint32_t REPORT_FRAME_HEADER = 0xF1F2F3F4;
-static constexpr uint32_t REPORT_FRAME_FOOTER = 0xF5F6F7F8;
-static constexpr uint16_t REPORT_FRAME_LENGTH_FIELD = 0x0083;
-static constexpr uint8_t REPORT_FRAME_TOTAL_SIZE = 141;
-static constexpr uint8_t REPORT_FRAME_HEARTBEAT_SIZE = 26;
-static constexpr uint8_t REJECT_DUMP_INITIAL = 5;
-static constexpr uint32_t REJECT_DUMP_INTERVAL_MS = 30000;
 static constexpr uint32_t BUFFER_FULL_LOG_INTERVAL_MS = 10000;
-static constexpr uint8_t REPORT_PRESENCE_INDEX = 6;
-static constexpr uint8_t REPORT_DISTANCE_INDEX = 7;
 static constexpr uint8_t CMD_FRAME_COMMAND = 6;
 static constexpr uint8_t CMD_FRAME_DATA_LENGTH = 4;
 static constexpr uint8_t CMD_ERROR_WORD = 8;
@@ -150,6 +131,7 @@ void LD2402Component::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "LD2402:\n"
                 "  Firmware version: %7s\n"
+                "  Output mode: basic text\n"
                 "  Presence timeout: %u s\n"
                 "  Max gate distance: %u",
                 this->firmware_ver_, this->config_presence_timeout_, this->config_max_gate_distance_);
@@ -213,7 +195,7 @@ void LD2402Component::setup() {
   this->set_max_distance_and_timeout(this->config_max_gate_distance_, this->config_presence_timeout_);
 
   memcpy(&this->new_config, &this->current_config, sizeof(this->current_config));
-  this->set_mode_(CMD_SYSTEM_MODE_ENERGY);
+  this->set_mode_(CMD_SYSTEM_MODE_BASIC);
 #ifdef USE_NUMBER
   this->init_gate_config_numbers();
 #endif
@@ -337,77 +319,104 @@ void LD2402Component::loop() {
   this->poll_auto_calibration_();
 }
 
-bool LD2402Component::validate_detection_frame_(const uint8_t *buffer, int len) const {
-  if (len != REPORT_FRAME_TOTAL_SIZE && len != REPORT_FRAME_HEARTBEAT_SIZE) {
-    return false;
+namespace {
+
+const char *trim_line(const char *line) {
+  while (*line == ' ' || *line == '\t') {
+    line++;
   }
-  if (memcmp(buffer, &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
-    return false;
-  }
-  uint16_t length_field;
-  memcpy(&length_field, &buffer[4], sizeof(length_field));
-  if (length_field != REPORT_FRAME_LENGTH_FIELD) {
-    return false;
-  }
-  if (memcmp(&buffer[len - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
-    return false;
-  }
-  if (buffer[REPORT_PRESENCE_INDEX] > 0x03) {
-    return false;
-  }
-  uint16_t range;
-  memcpy(&range, &buffer[REPORT_DISTANCE_INDEX], sizeof(range));
-  uint16_t max_dist_cm = static_cast<uint16_t>(this->current_config.max_gate) * 10;
-  if (max_dist_cm == 0) {
-    max_dist_cm = 1000;
-  }
-  if (range > max_dist_cm) {
-    return false;
-  }
-  return true;
+  return line;
 }
 
-int LD2402Component::expected_report_frame_size_(uint16_t length_field) {
-  if (length_field == REPORT_FRAME_LENGTH_FIELD) {
-    return -1;  // 0x0083 uses either heartbeat (26) or full energy (141) — see buffer_pos
-  }
-  if (length_field > 140) {
-    return -1;
-  }
-  return 4 + 2 + length_field + 4;
-}
-
-void LD2402Component::consume_report_bytes_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t consumed) {
-  const uint8_t remainder = buffer_pos - consumed;
-  if (remainder > 0) {
-    memmove(buffer, &buffer[consumed], remainder);
-  }
-  buffer_pos = remainder;
-  buffer[buffer_pos] = 0;
-}
-
-void LD2402Component::trim_or_hunt_report_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from) {
-  for (uint8_t i = search_from; i + 3 < buffer_pos; i++) {
-    if (buffer[i] != 0xF4) {
-      continue;
+const char *first_digit(const char *line) {
+  for (; *line != '\0'; line++) {
+    if (isdigit(static_cast<unsigned char>(*line))) {
+      return line;
     }
-    if (memcmp(&buffer[i], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
-      continue;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+void LD2402Component::process_text_lines_(uint8_t *buffer, uint8_t &buffer_pos) {
+  while (buffer_pos > 0) {
+    void *newline = memchr(buffer, '\n', buffer_pos);
+    if (newline == nullptr) {
+      return;
     }
-    const uint8_t remainder = buffer_pos - i;
-    memmove(buffer, &buffer[i], remainder);
+
+    auto *line_end = static_cast<uint8_t *>(newline);
+    *line_end = '\0';
+    if (line_end > buffer && line_end[-1] == '\r') {
+      line_end[-1] = '\0';
+    }
+
+    this->handle_text_line_(reinterpret_cast<char *>(buffer));
+
+    const uint8_t consumed = static_cast<uint8_t>((line_end - buffer) + 1);
+    const uint8_t remainder = buffer_pos - consumed;
+    if (remainder > 0) {
+      memmove(buffer, &buffer[consumed], remainder);
+    }
     buffer_pos = remainder;
-    buffer[buffer_pos] = 0;
-    ESP_LOGD(TAG, "Hunted report header at offset %u", i);
+    buffer[buffer_pos] = '\0';
+  }
+}
+
+void LD2402Component::handle_text_line_(const char *line) {
+  line = trim_line(line);
+  if (*line == '\0') {
     return;
   }
 
-  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
-  if (keep > 0 && keep < buffer_pos) {
-    memmove(buffer, &buffer[buffer_pos - keep], keep);
+  if (static_cast<uint8_t>(line[0]) < 0x20) {
+    return;
   }
-  buffer_pos = keep;
-  buffer[buffer_pos] = 0;
+
+  ESP_LOGV(TAG, "Text: %s", line);
+
+  auto publish_presence = [this](bool presence) {
+    if (this->presence_ == presence) {
+      return;
+    }
+    this->set_presence_(presence);
+    for (auto &listener : this->listeners_) {
+      listener->on_presence(presence);
+    }
+  };
+
+  // Factory basic mode: "OFF" (4F 46 46 0D 0A)
+  if (strcasecmp(line, "OFF") == 0) {
+    publish_presence(false);
+    return;
+  }
+
+  // Factory basic mode: "distance:436" (64 69 73 74 61 6E 63 65 3A + digits + 0D 0A)
+  if (strncasecmp(line, "distance", 8) != 0) {
+    return;
+  }
+
+  const char *num = first_digit(line + 8);
+  if (num == nullptr) {
+    return;
+  }
+
+  const optional<uint16_t> distance = parse_number<uint16_t>(num);
+  if (!distance.has_value()) {
+    return;
+  }
+
+  publish_presence(true);
+  this->set_distance_(distance.value());
+
+  const int32_t current_millis = App.get_loop_component_start_time();
+  if (current_millis - this->last_periodic_millis >= REFRESH_RATE_MS) {
+    this->last_periodic_millis = current_millis;
+    for (auto &listener : this->listeners_) {
+      listener->on_distance(this->get_distance_());
+    }
+  }
 }
 
 void LD2402Component::trim_or_hunt_cmd_header_(uint8_t *buffer, uint8_t &buffer_pos, uint8_t search_from) {
@@ -441,116 +450,6 @@ void LD2402Component::drain_uart_() {
   this->cmd_buffer_pos_ = 0;
 }
 
-void LD2402Component::process_report_frames_(uint8_t *buffer, uint8_t &buffer_pos) {
-  if (this->get_mode_() != CMD_SYSTEM_MODE_ENERGY) {
-    return;
-  }
-
-  while (buffer_pos >= REPORT_FRAME_HEARTBEAT_SIZE) {
-    if (memcmp(buffer, &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) != 0) {
-      this->trim_or_hunt_report_header_(buffer, buffer_pos, 0);
-      if (buffer_pos < REPORT_FRAME_HEARTBEAT_SIZE) {
-        return;
-      }
-      continue;
-    }
-
-    if (buffer_pos < 6) {
-      return;
-    }
-
-    uint16_t length_field;
-    memcpy(&length_field, &buffer[4], sizeof(length_field));
-
-    if (length_field == REPORT_FRAME_LENGTH_FIELD) {
-      const bool heartbeat_footer =
-          memcmp(&buffer[REPORT_FRAME_HEARTBEAT_SIZE - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0;
-      if (heartbeat_footer) {
-        if (this->validate_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE)) {
-          this->handle_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE);
-        } else {
-          this->log_rejected_detection_frame_(buffer, REPORT_FRAME_HEARTBEAT_SIZE);
-        }
-        this->consume_report_bytes_(buffer, buffer_pos, REPORT_FRAME_HEARTBEAT_SIZE);
-        continue;
-      }
-
-      if (buffer_pos < REPORT_FRAME_TOTAL_SIZE) {
-        return;
-      }
-
-      if (memcmp(&buffer[REPORT_FRAME_TOTAL_SIZE - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) == 0) {
-        if (this->validate_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE)) {
-          this->handle_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE);
-        } else {
-          this->log_rejected_detection_frame_(buffer, REPORT_FRAME_TOTAL_SIZE);
-        }
-        this->consume_report_bytes_(buffer, buffer_pos, REPORT_FRAME_TOTAL_SIZE);
-        continue;
-      }
-
-      ESP_LOGD(TAG, "0x0083 frame footer missing at %u bytes; hunting header", buffer_pos);
-      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
-      continue;
-    }
-
-    const int expected_len = this->expected_report_frame_size_(length_field);
-    if (expected_len < REPORT_FRAME_HEARTBEAT_SIZE || expected_len > MAX_LINE_LENGTH) {
-      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
-      continue;
-    }
-
-    const auto expected = static_cast<uint8_t>(expected_len);
-    if (buffer_pos < expected) {
-      return;
-    }
-
-    if (memcmp(&buffer[expected - 4], &REPORT_FRAME_FOOTER, sizeof(REPORT_FRAME_FOOTER)) != 0) {
-      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
-      continue;
-    }
-
-    if (this->validate_detection_frame_(buffer, expected)) {
-      this->handle_detection_frame_(buffer, expected);
-    } else {
-      this->log_rejected_detection_frame_(buffer, expected);
-    }
-    this->consume_report_bytes_(buffer, buffer_pos, expected);
-  }
-}
-
-void LD2402Component::log_rejected_detection_frame_(const uint8_t *buffer, uint8_t len) {
-  this->reject_log_count_++;
-  const uint32_t now = millis();
-  const bool dump_full =
-      (this->reject_log_count_ <= REJECT_DUMP_INITIAL) || (now - this->last_reject_dump_ms_ >= REJECT_DUMP_INTERVAL_MS);
-
-  uint16_t length_field = 0;
-  if (len >= 6) {
-    memcpy(&length_field, &buffer[4], sizeof(length_field));
-  }
-  const uint8_t presence = len > REPORT_PRESENCE_INDEX ? buffer[REPORT_PRESENCE_INDEX] : 0xFF;
-  uint16_t distance = 0;
-  if (len >= REPORT_DISTANCE_INDEX + sizeof(distance)) {
-    memcpy(&distance, &buffer[REPORT_DISTANCE_INDEX], sizeof(distance));
-  }
-  const int expected_len = this->expected_report_frame_size_(length_field);
-
-  if (!dump_full) {
-    if (this->reject_log_count_ == REJECT_DUMP_INITIAL + 1) {
-      ESP_LOGW(TAG, "Rejected detection logging throttled (%u frames so far)", this->reject_log_count_);
-    }
-    return;
-  }
-
-  this->last_reject_dump_ms_ = now;
-  const uint8_t dump_len = std::min<uint8_t>(len, MAX_LINE_LENGTH);
-  ESP_LOGW(TAG,
-           "Rejected detection #%u: buf_len=%u length_field=0x%04X expected_len=%d presence=0x%02X dist=%u hex=%s",
-           this->reject_log_count_, len, length_field, expected_len, presence, distance,
-           format_hex_pretty(buffer, dump_len).c_str());
-}
-
 bool LD2402Component::validate_cmd_frame_(const uint8_t *buffer, int len) const {
   if (len < 12) {
     return false;
@@ -573,14 +472,13 @@ void LD2402Component::resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos) {
   }
 
   for (uint8_t i = 0; i + 3 < buffer_pos; i++) {
-    if (buffer[i] == 0xF4 && memcmp(&buffer[i], &REPORT_FRAME_HEADER, sizeof(REPORT_FRAME_HEADER)) == 0) {
-      if (i == 0) {
-        return;
+    if (buffer[i] == '\n') {
+      const uint8_t remainder = buffer_pos - (i + 1);
+      if (remainder > 0) {
+        memmove(buffer, &buffer[i + 1], remainder);
       }
-      const uint8_t remainder = buffer_pos - i;
-      memmove(buffer, &buffer[i], remainder);
       buffer_pos = remainder;
-      buffer[buffer_pos] = 0;
+      buffer[buffer_pos] = '\0';
       return;
     }
     if (buffer[i] == 0xFD && memcmp(&buffer[i], &CMD_FRAME_HEADER, sizeof(CMD_FRAME_HEADER)) == 0) {
@@ -590,12 +488,17 @@ void LD2402Component::resync_buffer_(uint8_t *buffer, uint8_t &buffer_pos) {
       const uint8_t remainder = buffer_pos - i;
       memmove(buffer, &buffer[i], remainder);
       buffer_pos = remainder;
-      buffer[buffer_pos] = 0;
+      buffer[buffer_pos] = '\0';
       return;
     }
   }
 
-  this->trim_or_hunt_report_header_(buffer, buffer_pos, 0);
+  const uint8_t keep = std::min<uint8_t>(buffer_pos, 3);
+  if (keep > 0 && keep < buffer_pos) {
+    memmove(buffer, &buffer[buffer_pos - keep], keep);
+  }
+  buffer_pos = keep;
+  buffer[buffer_pos] = '\0';
 }
 
 void LD2402Component::append_rx_byte_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
@@ -608,16 +511,15 @@ void LD2402Component::append_rx_byte_(int rx_data, uint8_t *buffer, int len, uin
     if (this->cmd_active_) {
       this->trim_or_hunt_cmd_header_(buffer, buffer_pos, 1);
     } else {
-      this->process_report_frames_(buffer, buffer_pos);
-      this->trim_or_hunt_report_header_(buffer, buffer_pos, 1);
+      this->process_text_lines_(buffer, buffer_pos);
     }
     if (buffer_pos >= len - 1) {
       buffer_pos = 0;
-      buffer[0] = 0;
+      buffer[0] = '\0';
     }
   }
   buffer[buffer_pos++] = static_cast<uint8_t>(rx_data);
-  buffer[buffer_pos] = 0;
+  buffer[buffer_pos] = '\0';
 }
 
 void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &buffer_pos) {
@@ -626,11 +528,8 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
   }
 
   this->append_rx_byte_(rx_data, buffer, len, buffer_pos);
-  if (buffer_pos < 4) {
-    return;
-  }
 
-  if (memcmp(&buffer[buffer_pos - 4], &CMD_FRAME_FOOTER, sizeof(CMD_FRAME_FOOTER)) == 0) {
+  if (buffer_pos >= 4 && memcmp(&buffer[buffer_pos - 4], &CMD_FRAME_FOOTER, sizeof(CMD_FRAME_FOOTER)) == 0) {
     if (this->validate_cmd_frame_(buffer, buffer_pos)) {
       uint16_t cmd_word;
       memcpy(&cmd_word, &buffer[CMD_FRAME_COMMAND], sizeof(cmd_word));
@@ -654,31 +553,7 @@ void LD2402Component::readline_(int rx_data, uint8_t *buffer, int len, uint8_t &
     return;
   }
 
-  this->process_report_frames_(buffer, buffer_pos);
-}
-
-void LD2402Component::handle_detection_frame_(uint8_t *buffer, int len) {
-  const uint8_t index = REPORT_PRESENCE_INDEX;
-  uint16_t range;
-
-  const bool prev_presence = this->presence_;
-  this->set_presence_(buffer[index] != 0x00);
-  if (prev_presence != this->presence_) {
-    for (auto &listener : this->listeners_) {
-      listener->on_presence(this->presence_);
-    }
-  }
-
-  memcpy(&range, &buffer[REPORT_DISTANCE_INDEX], sizeof(range));
-  this->set_distance_(range);
-
-  const int32_t current_millis = App.get_loop_component_start_time();
-  if (current_millis - this->last_periodic_millis >= REFRESH_RATE_MS) {
-    this->last_periodic_millis = current_millis;
-    for (auto &listener : this->listeners_) {
-      listener->on_distance(this->get_distance_());
-    }
-  }
+  this->process_text_lines_(buffer, buffer_pos);
 }
 
 void LD2402Component::read_batch_(std::span<uint8_t, MAX_LINE_LENGTH> buffer) {
