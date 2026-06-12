@@ -63,7 +63,6 @@ static constexpr uint16_t CMD_ENABLE_CONF = 0x00FF;
 static constexpr uint16_t CMD_PROTOCOL_VER = 0x0002;
 static constexpr uint16_t CMD_READ_ABD_PARAM = 0x0008;
 static constexpr uint16_t CMD_READ_VERSION = 0x0000;
-static constexpr uint16_t CMD_RESTART = 0x0068;
 static constexpr uint16_t CMD_SYSTEM_MODE = 0x0000;
 static constexpr uint16_t CMD_SYSTEM_MODE_BASIC = 0x0064;
 static constexpr uint16_t CMD_WRITE_ABD_PARAM = 0x0007;
@@ -151,7 +150,6 @@ void LD2402Component::dump_config() {
   LOG_BUTTON("  ", "Save Config:", this->save_config_button_);
   LOG_BUTTON("  ", "Revert Edits:", this->revert_config_button_);
   LOG_BUTTON("  ", "Factory Reset:", this->factory_reset_button_);
-  LOG_BUTTON("  ", "Restart Module:", this->restart_module_button_);
 #endif
 }
 
@@ -253,16 +251,6 @@ void LD2402Component::factory_reset_action() {
   this->init_gate_config_numbers();
   this->refresh_gate_config_numbers();
 #endif
-}
-
-void LD2402Component::restart_module_action() {
-  ESP_LOGD(TAG, "Restarting");
-  this->send_module_restart();
-  this->set_timeout(250, [this]() {
-    this->set_config_mode(true);
-    this->set_system_mode(this->system_mode_);
-    this->set_config_mode(false);
-  });
 }
 
 void LD2402Component::revert_config_action() {
@@ -673,18 +661,12 @@ int LD2402Component::send_cmd_from_array(CmdFrameT frame) {
   this->cmd_reply_.ack = false;
   this->cmd_reply_.ack_value = 0;
   this->cmd_buffer_pos_ = 0;
-  if (frame.command != CMD_RESTART) {
-    this->cmd_active_ = true;
-  }  // Restart does not reply, thus no ack state required
+  this->cmd_active_ = true;
   uint8_t retry = 3;
   while (retry) {
     this->write_cmd_frame_(frame);
 
     error = 0;
-    if (frame.command == CMD_RESTART) {
-      return 0;  // restart does not reply exit now
-    }
-
     while (!this->cmd_reply_.ack) {
       while (this->available()) {
         this->readline_(this->read(), ack_buffer, sizeof(ack_buffer), this->cmd_buffer_pos_);
@@ -728,19 +710,6 @@ uint8_t LD2402Component::set_config_mode(bool enable) {
   cmd_frame.footer = CMD_FRAME_FOOTER;
   ESP_LOGV(TAG, "Sending set config %s command: %2X", enable ? "enable" : "disable", cmd_frame.command);
   return this->send_cmd_from_array(cmd_frame);
-}
-
-// Sends a restart and set system running mode to normal
-void LD2402Component::send_module_restart() { this->ld2402_restart(); }
-
-void LD2402Component::ld2402_restart() {
-  CmdFrameT cmd_frame;
-  cmd_frame.data_length = 0;
-  cmd_frame.header = CMD_FRAME_HEADER;
-  cmd_frame.command = CMD_RESTART;
-  cmd_frame.footer = CMD_FRAME_FOOTER;
-  ESP_LOGV(TAG, "Sending restart command: %2X", cmd_frame.command);
-  this->send_cmd_from_array(cmd_frame);
 }
 
 void LD2402Component::handle_cmd_error(uint8_t error) {

@@ -21,14 +21,6 @@ class LD2402RevertConfigButton : public button::Button, public Parented<LD2402Co
   void press_action() override;
 };
 
-class LD2402RestartModuleButton : public button::Button, public Parented<LD2402Component> {
- public:
-  LD2402RestartModuleButton() = default;
-
- protected:
-  void press_action() override;
-};
-
 class LD2402FactoryResetButton : public button::Button, public Parented<LD2402Component> {
  public:
   LD2402FactoryResetButton() = default;

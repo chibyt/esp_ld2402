@@ -15,7 +15,6 @@ from .. import CONF_LD2402_ID, LD2402Component, ld2402_ns
 
 LD2402ApplyConfigButton = ld2402_ns.class_("LD2402ApplyConfigButton", button.Button)
 LD2402RevertConfigButton = ld2402_ns.class_("LD2402RevertConfigButton", button.Button)
-LD2402RestartModuleButton = ld2402_ns.class_("LD2402RestartModuleButton", button.Button)
 LD2402FactoryResetButton = ld2402_ns.class_("LD2402FactoryResetButton", button.Button)
 LD2402AutoCalibrateButton = ld2402_ns.class_("LD2402AutoCalibrateButton", button.Button)
 LD2402SaveConfigButton = ld2402_ns.class_("LD2402SaveConfigButton", button.Button)
@@ -24,7 +23,6 @@ CONF_APPLY_CONFIG = "apply_config"
 CONF_AUTO_CALIBRATE = "auto_calibrate"
 CONF_SAVE_CONFIG = "save_config"
 CONF_REVERT_CONFIG = "revert_config"
-CONF_RESTART_MODULE = "restart_module"
 
 
 CONFIG_SCHEMA = {
@@ -50,11 +48,6 @@ CONFIG_SCHEMA = {
         device_class=DEVICE_CLASS_RESTART,
         entity_category=ENTITY_CATEGORY_CONFIG,
         icon=ICON_RESTART,
-    ),
-    cv.Optional(CONF_RESTART_MODULE): button.button_schema(
-        LD2402RestartModuleButton,
-        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-        icon=ICON_DATABASE,
     ),
     cv.Optional(CONF_FACTORY_RESET): button.button_schema(
         LD2402FactoryResetButton,
@@ -82,10 +75,6 @@ async def to_code(config):
         b = await button.new_button(revert_config)
         await cg.register_parented(b, config[CONF_LD2402_ID])
         cg.add(ld2402_component.set_revert_config_button(b))
-    if restart_config := config.get(CONF_RESTART_MODULE):
-        b = await button.new_button(restart_config)
-        await cg.register_parented(b, config[CONF_LD2402_ID])
-        cg.add(ld2402_component.set_restart_module_button(b))
     if factory_reset := config.get(CONF_FACTORY_RESET):
         b = await button.new_button(factory_reset)
         await cg.register_parented(b, config[CONF_LD2402_ID])
