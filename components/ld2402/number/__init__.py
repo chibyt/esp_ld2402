@@ -67,13 +67,11 @@ CONFIG_SCHEMA = cv.Schema(
             LD2402StillThresholdNumbers,
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon=ICON_MOTION_SENSOR,
-            accuracy_decimals=1,
         ),
         cv.Inclusive(CONF_MOVE_THRESHOLD, GATE_GROUP): number.number_schema(
             LD2402MoveThresholdNumbers,
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon=ICON_MOTION_SENSOR,
-            accuracy_decimals=1,
         ),
         cv.Optional(CONF_GATE_MOVE_SENSITIVITY): number.number_schema(
             LD2402MoveSensFactorNumber,
@@ -97,13 +95,11 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
                     LD2402MoveThresholdNumbers,
                     entity_category=ENTITY_CATEGORY_CONFIG,
                     icon=ICON_MOTION_SENSOR,
-                    accuracy_decimals=1,
                 ),
                 cv.Required(CONF_STILL_THRESHOLD): number.number_schema(
                     LD2402StillThresholdNumbers,
                     entity_category=ENTITY_CATEGORY_CONFIG,
                     icon=ICON_MOTION_SENSOR,
-                    accuracy_decimals=1,
                 ),
             }
         )
