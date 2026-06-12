@@ -101,8 +101,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #ifdef USE_BUTTON
   void set_apply_config_button(button::Button *button) { this->apply_config_button_ = button; };
   void set_auto_calibrate_button(button::Button *button) { this->auto_calibrate_button_ = button; };
-  void set_save_config_button(button::Button *button) { this->save_config_button_ = button; };
-  void set_revert_config_button(button::Button *button) { this->revert_config_button_ = button; };
   void set_factory_reset_button(button::Button *button) { this->factory_reset_button_ = button; };
 #endif
 #ifdef USE_SENSOR
@@ -118,9 +116,7 @@ class LD2402Component : public Component, public uart::UARTDevice {
 
   void apply_config_action();
   void auto_calibrate_action();
-  void save_config_action();
   void factory_reset_action();
-  void revert_config_action();
   float get_setup_priority() const override;
   int send_cmd_from_array(CmdFrameT cmd_frame);
   void handle_cmd_error(uint8_t error);
@@ -137,8 +133,6 @@ class LD2402Component : public Component, public uart::UARTDevice {
 #ifdef USE_BUTTON
   button::Button *apply_config_button_{nullptr};
   button::Button *auto_calibrate_button_{nullptr};
-  button::Button *save_config_button_{nullptr};
-  button::Button *revert_config_button_{nullptr};
   button::Button *factory_reset_button_{nullptr};
 #endif
 #ifdef USE_SENSOR

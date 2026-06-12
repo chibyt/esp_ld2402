@@ -145,10 +145,8 @@ void LD2402Component::dump_config() {
   }
 #endif
 #ifdef USE_BUTTON
-  LOG_BUTTON("  ", "Apply Config:", this->apply_config_button_);
+  LOG_BUTTON("  ", "Apply & Save Config:", this->apply_config_button_);
   LOG_BUTTON("  ", "Auto Calibrate:", this->auto_calibrate_button_);
-  LOG_BUTTON("  ", "Save Config:", this->save_config_button_);
-  LOG_BUTTON("  ", "Revert Edits:", this->revert_config_button_);
   LOG_BUTTON("  ", "Factory Reset:", this->factory_reset_button_);
 #endif
 }
@@ -207,7 +205,7 @@ void LD2402Component::apply_config_action() {
     ESP_LOGD(TAG, "No configuration change detected");
     return;
   }
-  ESP_LOGD(TAG, "Reconfiguring");
+  ESP_LOGD(TAG, "Applying and saving configuration");
   if (this->set_config_mode(true) == LD2402_ERROR_TIMEOUT) {
     ESP_LOGE(TAG, ESP_LOG_MSG_COMM_FAIL);
     this->mark_failed();
@@ -223,7 +221,10 @@ void LD2402Component::apply_config_action() {
   this->init_gate_config_numbers();
 #endif
   this->set_system_mode(this->system_mode_);
-  this->set_config_mode(false);  // Disable config mode to save new values in LD2402 nvm
+  if (this->save_params_to_flash_() != 0) {
+    ESP_LOGE(TAG, "Failed to save parameters to flash");
+  }
+  this->set_config_mode(false);
 }
 
 void LD2402Component::factory_reset_action() {
@@ -253,14 +254,6 @@ void LD2402Component::factory_reset_action() {
 #endif
 }
 
-void LD2402Component::revert_config_action() {
-  memcpy(&this->new_config, &this->current_config, sizeof(this->current_config));
-#ifdef USE_NUMBER
-  this->init_gate_config_numbers();
-#endif
-  ESP_LOGD(TAG, "Reverted config number edits");
-}
-
 void LD2402Component::auto_calibrate_action() {
   if (this->calibrating_) {
     ESP_LOGW(TAG, "Auto-calibration already in progress");
@@ -283,19 +276,6 @@ void LD2402Component::auto_calibrate_action() {
   this->calibration_progress_ = 0;
   this->last_calibration_poll_ms_ = 0;
   this->publish_calibration_progress_(0);
-}
-
-void LD2402Component::save_config_action() {
-  ESP_LOGI(TAG, "Saving LD2402 parameters to flash");
-  if (this->set_config_mode(true) == LD2402_ERROR_TIMEOUT) {
-    ESP_LOGE(TAG, ESP_LOG_MSG_COMM_FAIL);
-    this->mark_failed();
-    return;
-  }
-  if (this->save_params_to_flash_() != 0) {
-    ESP_LOGE(TAG, "Failed to save parameters to flash");
-  }
-  this->set_config_mode(false);
 }
 
 void LD2402Component::loop() {
