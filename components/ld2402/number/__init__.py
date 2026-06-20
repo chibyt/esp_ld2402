@@ -112,7 +112,7 @@ async def to_code(config):
     LD2402_component = await cg.get_variable(config[CONF_LD2402_ID])
     if gate_timeout_config := config.get(CONF_PRESENCE_TIMEOUT):
         n = await number.new_number(
-            gate_timeout_config, min_value=30, max_value=120, step=5
+            gate_timeout_config, min_value=30, max_value=600, step=5
         )
         await cg.register_parented(n, config[CONF_LD2402_ID])
         cg.add(LD2402_component.set_gate_timeout_number(n))

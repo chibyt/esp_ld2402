@@ -33,7 +33,7 @@ CONFIG_SCHEMA = cv.All(
                 min=1.0, max=20.0
             ),
             cv.Optional(CONF_PRESENCE_TIMEOUT, default=30): cv.All(
-                cv.int_, cv.Range(min=30, max=120)
+                cv.int_, cv.Range(min=30, max=600)
             ),
             cv.Optional(CONF_MAX_GATE_DISTANCE, default=85): cv.All(
                 cv.int_, cv.Range(min=7, max=100)
